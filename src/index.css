@@ -2,9 +2,4 @@
 @tailwind components;
 @tailwind utilities;
 
-@media print {
-  /* Print-friendly: white background, hide controls */
-  body { background: #fff; }
-  .no-print { display: none !important; }
-  .card { break-inside: avoid; }
-}
+@media print { .no-print{display:none!important} .card{break-inside:avoid} }
