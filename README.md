@@ -1,152 +1,233 @@
-# 进食监督面板（云同步 + 周视图 + 只读分享）
+# Intake Panel｜进食监督面板（云同步 + 周/月视图 + 奖惩规则）
 
-一个移动端友好、可互动的面板，支持：
-- **两餐前/后汇报**、内容与时间填写
-- **Commander 复核**（可选）
-- 自动判定**当日完成**、**连续天数**、**每 N 天触发重大奖励**、**未完成记惩罚待执行**
-- **周视图（打卡墙）** 与 **月视图** 切换
-- **云同步（Firebase Firestore + 匿名登录）**，多人协作（Commander / Participant）
-- **只读链接 / 打印模式**（`?mode=readonly`）
-- **本地存储** 作为离线与简易模式
+一个为「两人协作监督」场景打造的饮食打卡工具。支持 **房间/角色**、**云端同步（Firestore）** 与 **本地离线**、**周/月视图切换**、**7 天奖惩统计**、**只读分享/打印**、**JSON 导入导出** 等。
 
-> 本项目保持“奖励/惩罚”为**中性字段**，不包含任何露骨内容。你可在界面设置中自定义标签名。
+- Tech stack：React + Vite + Tailwind + shadcn/ui + framer-motion + Firebase Auth/Firestore + Vercel  
+- 角色：**Commander**（监督者） / **Participant**（参与者）  
+- 适配：移动端 / 桌面端
 
 ---
 
-## 快速开始（本地）
+## ✨ 主要特性
+
+- **餐次打卡（两餐）**：勾选「进食前/后已汇报」，并填写 **时间** 与 **食物内容**  
+  （本次更新：**参与者可编辑时间与食物内容**）。
+- **Commander 复核（可选）**：是否需要复核可在设置中开关。
+- **完成判定**：当日两餐均完成“前/后汇报”，且（若开启）已复核，则记为**完成**。
+- **7 天奖惩机制**（页面内有可视化与规则说明）  
+  自首次记录之日起，每 **连续 7 天** 为一个统计段：  
+  - **该段 7 天全部完成** → 计 **1 次重大奖励**（待发放）；  
+  - **该段的未完成天数** → 计入 **惩罚待执行** 次数。  
+  Commander 可在每日卡片上 **发放奖励 / 执行惩罚** 并记录。
+- **周视图 / 月视图**：周视图提供 4 个微开关（餐1前/后、餐2前/后），月视图展示完整表单。
+- **云同步 / 本地离线**：可随时切换。云端用 Firestore；本地按「年-月」分区存储。
+- **分享与打印**：可分享可编辑链接或 **只读/打印** 链接（`?mode=readonly`）。
+- **JSON 导入/导出**：一键备份/迁移当月数据。
+
+> **中性设计**：奖惩仅为字段名称，默认文案不含任何露骨内容；你可在设置中自定义标签。
+
+---
+
+## 🧑‍🤝‍🧑 角色与权限
+
+| 区域 / 字段                               | Participant（参与者） | Commander |
+|------------------------------------------|------------------------|-----------|
+| 勾选餐前/餐后 `preReported/postReported` | ✅ 可写                 | ✅ 可写    |
+| 时间 `preTime/postTime`、内容 `note`     | ✅ 可写                 | ✅ 可写    |
+| 未完成原因 `reason`                       | ✅ 可写                 | ✅ 可写    |
+| 复核 `commanderReviewed`                  | 🚫                     | ✅ 可写    |
+| 奖励已发放 `rewardGranted`                | 🚫                     | ✅ 可写    |
+| 惩罚已执行 `consequenceExecuted`         | 🚫                     | ✅ 可写    |
+| 读记录                                   | ✅（房间成员）          | ✅         |
+
+---
+
+## ⚙️ 本地开发
+
 ```bash
 npm install
 npm run dev
 ```
-打开终端提示地址（通常 http://localhost:5173）。
+浏览器打开终端提示地址（通常 http://localhost:5173）。
 
 ---
 
-## 云同步（Firebase）配置
+## 🔐 Firebase（云同步）配置
 
-### 1. 创建 Firebase 项目
-- 前往 https://console.firebase.google.com 新建项目
-- 启用 **Authentication → Sign-in method → Anonymous（匿名登录）**
-- 启用 **Firestore Database → Start in production mode**（生产模式）
+1. **创建 Firebase 项目**  
+   - 启用 **Authentication → Sign-in method → Anonymous（匿名登录）**  
+   - 启用 **Cloud Firestore**（Production mode）
 
-### 2. 添加 Web 应用并记录配置
-- 在项目设置里添加 Web App，得到配置：
-  - apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId
+2. **创建 Web App**，记录以下配置项：  
+   `apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId`
 
-### 3. 填写环境变量
-在项目根目录创建 `.env` 文件（或在 Vercel/Netlify 上配置环境变量）：
-```
-VITE_FIREBASE_API_KEY=xxxxxxxx
-VITE_FIREBASE_AUTH_DOMAIN=xxxx.firebaseapp.com
-VITE_FIREBASE_PROJECT_ID=xxxx
-VITE_FIREBASE_STORAGE_BUCKET=xxxx.appspot.com
-VITE_FIREBASE_MESSAGING_SENDER_ID=xxxx
-VITE_FIREBASE_APP_ID=1:xxx:web:xxxx
-```
+3. **环境变量**（Vite 使用 `VITE_` 前缀）  
+   在项目根目录创建 `.env.local`（或在 Vercel 项目环境变量中配置）：
+   ```env
+   VITE_FIREBASE_API_KEY=xxxxxxxx
+   VITE_FIREBASE_AUTH_DOMAIN=xxxx.firebaseapp.com
+   VITE_FIREBASE_PROJECT_ID=xxxx
+   VITE_FIREBASE_STORAGE_BUCKET=xxxx.appspot.com
+   VITE_FIREBASE_MESSAGING_SENDER_ID=xxxx
+   VITE_FIREBASE_APP_ID=1:xxx:web:xxxx
+   ```
 
-### 4. Firestore 规则（复制到控制台 Rules 里保存发布）
-该规则允许：
-- 只有**房间成员**可读写本房间数据；
-- **Participant** 只能写“餐次相关/原因”等字段；
-- **Commander** 才能写“复核、奖励发放、惩罚执行”等字段；
-- 允许通过**加入码**加入为 Participant。
+4. **Authorized domains**（非常重要）  
+   在 Firebase Auth 的 **Authorized domains** 添加：  
+   - `localhost`  
+   - `<your-vercel-project>.vercel.app`  
+   - 如有自定义域名，也需加入
 
-```
-// Firestore Rules
+---
+
+## 🔒 Firestore 规则（复制到控制台 Rules 并发布）
+
+与当前实现匹配：**成员可读；参与者只能改餐食/时间/内容/原因；Commander 还能改复核与奖惩；仅 Commander 可改房间元数据**。
+
+```rules
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isAuthed() { return request.auth != null; }
+
+    function authed() { return request.auth != null; }
+
     function isMember(roomId) {
-      return exists(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid));
-    }
-    function getRole(roomId) {
-      return get(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid)).data.role;
+      return authed() &&
+        exists(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid));
     }
 
+    function isCommander(roomId) {
+      return authed() &&
+        get(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid)).data.role == "commander";
+    }
+
+    // 参与者允许变更的字段
+    function participantKeysOK() {
+      let allowed = ["date","meal1","meal2","reason","updatedAt","updatedByUid","updatedByRole"];
+      let d = request.resource.data.diff(resource.data);
+      return d.affectedKeys().hasOnly(allowed);
+    }
+
+    // 指挥官允许变更的字段
+    function commanderKeysOK() {
+      let allowed = [
+        "date","meal1","meal2","reason",
+        "commanderReviewed","rewardGranted","consequenceExecuted",
+        "updatedAt","updatedByUid","updatedByRole"
+      ];
+      let d = request.resource.data.diff(resource.data);
+      return d.affectedKeys().hasOnly(allowed);
+    }
+
+    // 房间元数据（含 joinCode）
     match /rooms/{roomId} {
-      allow read: if isAuthed() && isMember(roomId);
-      allow create: if isAuthed();
-      allow update: if false; // 房间元数据仅由创建者通过后台维护，简化权限
+      allow read: if true;
+      allow write: if isCommander(roomId);
+    }
 
-      // 成员表：加入房间
-      match /members/{uid} {
-        allow read: if isAuthed() && isMember(roomId);
-        // 创建成员（participant）：需要房间开放加入且加入码正确
-        allow create: if isAuthed() && request.auth.uid == uid
-          && get(/databases/$(database)/documents/rooms/$(roomId)).data.openJoin == true
-          && request.resource.data.role == 'participant'
-          && request.resource.data.uid == request.auth.uid
-          && request.resource.data.joinCode == get(/databases/$(database)/documents/rooms/$(roomId)).data.joinCode
-          && request.resource.data.keys().hasOnly(['uid','role','createdAt','joinCode']);
-        // 更新/删除成员：禁止（如需可自行扩展）
-        allow update, delete: if false;
-      }
+    // 成员子集合：自己或 Commander 可写
+    match /rooms/{roomId}/members/{uid} {
+      allow read:  if authed() && (request.auth.uid == uid || isCommander(roomId));
+      allow write: if authed() && (request.auth.uid == uid || isCommander(roomId));
+    }
 
-      // 记录表
-      match /records/{date} {
-        allow read: if isAuthed() && isMember(roomId);
-        allow create, update: if isAuthed() && isMember(roomId)
-          && (
-            // Commander 可写所有字段
-            (getRole(roomId) == 'commander')
-            ||
-            // Participant 只能写餐次/原因/日期等字段，不能写 commander 专属字段
-            (getRole(roomId) == 'participant'
-              && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-                  'date','meal1','meal2','reason','updatedAt','updatedByUid','updatedByRole'
-              ])
-            )
-          );
-        allow delete: if false;
-      }
+    // 进食记录
+    match /rooms/{roomId}/records/{dateKey} {
+      allow read: if isMember(roomId);
+
+      allow create, update: if isMember(roomId)
+        && request.resource.data.date == dateKey
+        && (
+             (isCommander(roomId) && commanderKeysOK()) ||
+             (!isCommander(roomId) && participantKeysOK())
+           );
+
+      allow delete: if isCommander(roomId);
     }
   }
 }
 ```
 
-> 说明：加入成员时，前端会在 `members/{uid}` 的 `create` 请求体里临时携带 `joinCode`，用来和房间里的 `joinCode` 校验；规则限制了可写入的键，但为了避免保存加入码，你可以让前端创建后立刻再 `update` 覆盖掉该字段（本示例前端未保存 joinCode 字段到 members 文档）。
+> 如果你把「加入码」校验放在前端（`joinAsParticipant` 内已经校验），规则无需关心加入码；若要挪到规则层，可扩展 `/rooms/{roomId}/members` 的 `create` 校验逻辑。
 
 ---
 
-## 使用指南
+## 🚀 部署到 Vercel
 
-### 角色与加入
-- **创建房间（Commander）**：点“创建房间”，系统生成 `房间ID + 加入码`；把这两项发给她即可加入；你自动成为 **Commander**。  
-- **参与者加入（Participant）**：她在“加入房间（参与者）”中输入 `房间ID + 加入码` 即可。  
-- **只读分享**：在顶部点击“只读/打印”，复制带 `?mode=readonly` 的链接。
-
-### 权限划分（前端与规则双层控制）
-- **Participant**：仅能勾选餐前/餐后、填写时间与内容、填写未完成原因。  
-- **Commander**：还能复核、标记奖励发放/惩罚执行、调整设置。  
-- **Visitor**：未加入房间人员为访客，只读。
-
-### 周视图 / 打卡墙
-- 顶部“周视图”开关即可切换；周卡里提供 4 个微开关（餐1前/后、餐2前/后），适合手机端快速打卡。
-
-### 只读分享 / 打印
-- 点击“只读/打印”生成链接，打开后界面自动隐藏控制按钮；直接 `Ctrl/Cmd + P` 打印或保存 PDF。
-
-### 本地模式（无云）
-- 关闭“云同步”后，数据自动保存到浏览器 `localStorage`（按月份区分）。
+1. 将 GitHub 仓库 **Import** 到 Vercel  
+2. 在 Vercel **Settings → Environment Variables** 配置与 `.env.local` 相同的 `VITE_FIREBASE_*`  
+3. 一键 **Deploy**  
+4. 把 Vercel 生成的域名加入 Firebase **Authorized domains**  
+5. 打开站点 → 顶部切换 **云同步** 为「已开启」
 
 ---
 
-## 部署
+## 📘 使用流程
 
-### Vercel（推荐）/ Netlify
-- **Build 命令**：`npm run build`
-- **输出目录**：`dist`
-- 环境变量：将 `.env` 中的 `VITE_FIREBASE_*` 配置到平台环境变量中。
+- **Commander（监督者）**
+  1) 开云同步 → **创建房间**（生成 `房间ID + 加入码`）  
+  2) 把 `房间ID + 加入码` 发给参与者  
+  3) 在每日卡片上进行 **复核/发放奖励/执行惩罚** 的记录
+
+- **Participant（参与者）**
+  1) **加入房间（参与者）** → 输入 `房间ID + 加入码`  
+  2) 勾选 **餐前/餐后**，填写 **时间/食物内容**，必要时填写 **未完成原因**
+
+- **只读/打印**  
+  顶部「只读/打印」按钮生成只读链接（带 `?mode=readonly`），可直接打印或导出 PDF。
 
 ---
 
-## 开发提示
-- 可修改 `src/App.tsx` 自定义字段标签（保持中性描述即可）  
-- 若需要 **PWA（离线 + 主屏）**，建议加 `vite-plugin-pwa`（本仓库留给你按需开启）  
-- 若希望更严格的身份：可以把 Anonymous 改为 Email/Magic Link 登录，并在 `members` 文档里绑定邮箱。
+## 🧪 数据模型（节选）
+
+```ts
+type MealEntry = {
+  preReported: boolean;
+  postReported: boolean;
+  preTime?: string;
+  postTime?: string;
+  note?: string; // 食物内容
+};
+
+type DayRecord = {
+  date: string; // YYYY-MM-DD（作为文档ID）
+  meal1?: MealEntry;
+  meal2?: MealEntry;
+  reason?: string;
+  commanderReviewed?: boolean;
+  rewardGranted?: boolean;
+  consequenceExecuted?: boolean;
+  updatedAt?: number;
+  updatedByUid?: string;
+  updatedByRole?: "participant" | "commander";
+};
+```
 
 ---
 
-## 免责声明 / 健康提醒
-- 本工具仅作习惯养成与记录；任何“奖励/惩罚”均应在双方自愿、健康与安全前提下进行，必要时咨询专业人士建议。
+## 🛠️ 常见问题
+
+- **线上无法编辑，但本地可以？**  
+  1) 确认 Firestore 规则已发布为上文版本；  
+  2) 确认站点域名已加入 Firebase **Authorized domains**；  
+  3) 刷新页面；确认顶部 **云同步** 已开启；  
+  4) 确认自己已成为该房间 **members**（`rooms/{roomId}/members/{uid}`）。
+
+- **参与者仍不能填时间或食物？**  
+  升级到本次版本后已开放；若仍不行，请检查 **Firestore 规则** 与 **前端代码** 是否均已更新并重新部署。
+
+- **没有登录弹窗？**  
+  本应用使用 **匿名登录** 自动完成，无需弹窗。域名白名单正确即可。
+
+---
+
+## 📜 许可证
+
+MIT
+
+---
+
+### 更新摘要
+- ✅ 参与者可编辑「时间」与「食物内容」  
+- ✅ 内置 **7 天奖惩统计**，并在页面写清楚规则  
+- ✅ Firestore 规则与前端权限对齐（参与者/Commander 字段级写入限制）
