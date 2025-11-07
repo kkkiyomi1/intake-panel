@@ -18,6 +18,7 @@ import {
   ChevronRight,
   Link as LinkIcon,
   Printer,
+  Info,
 } from "lucide-react";
 import { ensureAnonAuth } from "./firebase";
 import { getMonthDates, fmtDate, getWeekdayZh, computeStreaks, groupByWeeks } from "./util";
@@ -117,7 +118,7 @@ export default function App() {
     const reviewOk = settings.requireCommanderReview ? !!r.commanderReviewed : true;
     return !!(mealsOk && reviewOk);
   }
-  const { streaks, longest } = useMemo(
+  const { streaks } = useMemo(
     () => computeStreaks(monthDates, isComplete),
     [monthDates, records, settings.requireCommanderReview]
   );
@@ -133,11 +134,49 @@ export default function App() {
     () => monthDates.filter((k) => !isComplete(k) && !records[k]?.consequenceExecuted),
     [monthDates, records]
   );
-  const totalCompleteDays = useMemo(() => monthDates.filter(isComplete).length, [monthDates, records]);
-  const today = new Date();
-  const todayKey = fmtDate(today.getFullYear(), today.getMonth() + 1, today.getDate());
 
-  // Write helper (cloud or local)
+  // ============== 7 天分段统计（从首条记录起，到今天） ==============
+  const sevenBuckets = useMemo(() => {
+    const allKeys = Object.keys(records || {})
+      .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k))
+      .sort();
+    if (allKeys.length === 0) return [] as {
+      start: DayKey; end: DayKey; days: DayKey[];
+      rewardCount: number; punishCount: number;
+    }[];
+
+    // 从第一天到今天构造连续日期轴
+    const [sy, sm, sd] = allKeys[0].split("-").map(Number);
+    const start = new Date(sy, sm - 1, sd);
+    const today = new Date();
+    const axis: DayKey[] = [];
+    for (let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
+      axis.push(fmtDate(d.getFullYear(), d.getMonth() + 1, d.getDate()));
+    }
+
+    const out: {
+      start: DayKey; end: DayKey; days: DayKey[];
+      rewardCount: number; punishCount: number;
+    }[] = [];
+    for (let i = 0; i < axis.length; i += 7) {
+      const chunk = axis.slice(i, i + 7);
+      const allDone   = (chunk.length === 7) && chunk.every(k => isComplete(k));
+      const punishNum = chunk.filter(k => !isComplete(k)).length;
+      out.push({
+        start: chunk[0],
+        end:   chunk[chunk.length - 1],
+        days:  chunk,
+        rewardCount: allDone ? 1 : 0,
+        punishCount: punishNum,
+      });
+    }
+    return out;
+  }, [records, settings.requireCommanderReview]);
+
+  const totalRewardAcross = useMemo(() => sevenBuckets.reduce((s,b)=>s+b.rewardCount,0), [sevenBuckets]);
+  const totalPunishAcross = useMemo(() => sevenBuckets.reduce((s,b)=>s+b.punishCount,0), [sevenBuckets]);
+
+  // Write helper (cloud or local) —— 乐观更新，修复输入无法编辑
   async function upsertRecord(k: DayKey, updater: (rec: DayRecord) => void) {
     const cur: DayRecord =
       records[k] ?? {
@@ -148,23 +187,30 @@ export default function App() {
         rewardGranted: false,
         consequenceExecuted: false,
       };
+    const before = JSON.parse(JSON.stringify(cur)) as DayRecord;
     const copy: DayRecord = JSON.parse(JSON.stringify(cur));
     updater(copy);
+
+    // 1) 先本地更新（让输入框立即响应）
+    setRecords((prev) => ({ ...prev, [k]: copy }));
+
+    // 2) 再同步到云；失败则回滚
     if (cloudEnabled && roomId && uid) {
-      await writeRecord(roomId, copy, uid, role);
-    } else {
-      setRecords((prev) => ({ ...prev, [k]: copy }));
+      try {
+        await writeRecord(roomId, copy, uid, role);
+      } catch (e: any) {
+        alert(e?.message || "云端同步失败，已回滚本次修改");
+        setRecords((prev) => ({ ...prev, [k]: before }));
+      }
     }
   }
 
   // UI role permissions
   const canEditMeals = role !== "visitor" && !readonlyMode;
   const canCommander = role === "commander" && !readonlyMode;
-  const canParticipant = role === "participant" && !readonlyMode;
 
   // Week view / month view toggle
   const [weekView, setWeekView] = useState(false);
-  const weeks = useMemo(() => groupByWeeks(monthDates), [monthDates]);
 
   // Room controls
   async function onCreateRoom() {
@@ -365,17 +411,29 @@ export default function App() {
           />
         </div>
 
+        {/* 规则说明 + 7天统计 */}
+        <div className="mb-6 grid gap-3 md:grid-cols-2 no-print">
+          <RulesCard settings={settings} requireCommander={settings.requireCommanderReview} />
+          <SevenDayBucketsPanel
+            buckets={sevenBuckets}
+            majorLabel={settings.majorRewardLabel}
+            punishLabel={settings.consequenceLabel}
+            totalReward={totalRewardAcross}
+            totalPunish={totalPunishAcross}
+          />
+        </div>
+
         {/* Content */}
         {weekView ? (
           <WeekGrid
             dates={monthDates}
             weeks={groupByWeeks(monthDates)}
-            {...{ records, setRecords, isComplete, streaks, settings, role, readonlyMode, upsertRecord }}
+            {...{ records, isComplete, streaks, settings, role, readonlyMode, upsertRecord }}
           />
         ) : (
           <MonthGrid
             dates={monthDates}
-            {...{ records, setRecords, isComplete, streaks, settings, role, readonlyMode, upsertRecord }}
+            {...{ records, isComplete, streaks, settings, role, readonlyMode, upsertRecord }}
           />
         )}
       </div>
@@ -431,10 +489,69 @@ function StatsPanel({
   );
 }
 
+/** 规则说明卡片 */
+function RulesCard({ settings, requireCommander }: { settings: Settings; requireCommander: boolean }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Info className="h-4 w-4" /> 奖惩机制说明
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="text-sm leading-6 text-gray-700">
+        <div>• <b>“完成”</b>：当日 <b>两餐</b>均<span className="underline">“进食前/后已汇报”</span>为勾选
+          {requireCommander ? "，且完成 Commander 复核" : ""}。</div>
+        <div>• <b>7 天统计</b>：从首次记录之日开始，每连续 7 天形成一段。</div>
+        <div className="pl-4">
+          <div>— 若该段 <b>7 天全部完成</b> → 记 <b>1 次「{settings.majorRewardLabel}」</b>。</div>
+          <div>— 该段内 <b>未完成的天数</b> → 计作 <b>{settings.consequenceLabel} 次数</b>。</div>
+        </div>
+        <div>• 统计仅用于提醒；实际的「发放/执行」需 Commander 在每日卡片上点击按钮进行记录。</div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 7 天分段统计卡片 */
+function SevenDayBucketsPanel({
+  buckets,
+  majorLabel,
+  punishLabel,
+  totalReward,
+  totalPunish,
+}: {
+  buckets: { start: DayKey; end: DayKey; days: DayKey[]; rewardCount: number; punishCount: number; }[];
+  majorLabel: string;
+  punishLabel: string;
+  totalReward: number;
+  totalPunish: number;
+}) {
+  const latest = buckets[buckets.length - 1];
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">7 天分段统计</CardTitle>
+      </CardHeader>
+      <CardContent className="text-sm text-gray-700 space-y-2">
+        {latest ? (
+          <>
+            <div>当前段：<b>{latest.start}</b> ~ <b>{latest.end}</b>（{latest.days.length} 天）</div>
+            <div>本段统计：<b>{majorLabel}</b> {latest.rewardCount} 次，<b>{punishLabel}</b> {latest.punishCount} 次</div>
+          </>
+        ) : (
+          <div>暂无数据，开始记录后会自动生成每 7 天一段的统计。</div>
+        )}
+        <div className="pt-2 border-t">
+          累计统计：<b>{majorLabel}</b> {totalReward} 次，<b>{punishLabel}</b> {totalPunish} 次
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function MonthGrid({
   dates,
   records,
-  setRecords,
   isComplete,
   streaks,
   settings,
@@ -444,7 +561,6 @@ function MonthGrid({
 }: {
   dates: DayKey[];
   records: Record<DayKey, DayRecord>;
-  setRecords: any;
   isComplete: (k: DayKey) => boolean;
   streaks: Record<DayKey, number>;
   settings: Settings;
@@ -526,7 +642,6 @@ function WeekGrid({
   dates,
   weeks,
   records,
-  setRecords,
   isComplete,
   streaks,
   settings,
@@ -537,7 +652,6 @@ function WeekGrid({
   dates: DayKey[];
   weeks: DayKey[][];
   records: Record<DayKey, DayRecord>;
-  setRecords: any;
   isComplete: (k: DayKey) => boolean;
   streaks: Record<DayKey, number>;
   settings: Settings;
@@ -726,7 +840,7 @@ function ToggleField({
   );
 }
 
-/** NEW: TinyToggle 用于周视图的小开关按钮 */
+/** 周视图小开关 */
 function TinyToggle({
   label,
   checked,
@@ -739,9 +853,7 @@ function TinyToggle({
   return (
     <button
       type="button"
-      className={`rounded-lg border px-2 py-1 text-xs ${
-        checked ? "bg-emerald-100 border-emerald-300" : "bg-white"
-      }`}
+      className={`rounded-lg border px-2 py-1 text-xs ${checked ? "bg-emerald-100 border-emerald-300" : "bg-white"}`}
       onClick={() => onChange(!checked)}
     >
       {label}
