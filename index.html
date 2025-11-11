@@ -2,11 +2,50 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>进食监督面板（云同步）</title>
+    <!-- 更完整的移动端适配（含 iOS 刘海屏安全区域） -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+    <!-- 基础 SEO -->
+    <meta name="description" content="进食监督面板｜云同步｜周视图｜可安装到桌面。支持两餐前后汇报、Commander 复核、7天分段统计与只读分享。" />
+
+    <!-- 主题色：为浅/深色模式分别指定（兼容安卓地址栏着色） -->
+    <meta name="theme-color" content="#0ea5e9" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b3c69" media="(prefers-color-scheme: dark)" />
+
+    <!-- Web App Manifest -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- Favicon（临时用 192 图标，后续可换 32/16） -->
+    <link rel="icon" href="/pwa-192.png" sizes="192x192" />
+
+    <!-- iOS PWA 支持 -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="进食打卡" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- 避免 iOS/微信自动把数字识别成电话等 -->
+    <meta name="format-detection" content="telephone=no,email=no,address=no" />
+
+    <title>Intake Panel · 进食监督面板</title>
   </head>
-  <body class="bg-gray-50">
+  <body>
+    <noscript>需要启用 JavaScript 才能使用本应用。</noscript>
     <div id="root"></div>
+
+    <!-- 入口脚本（Vite） -->
     <script type="module" src="/src/main.tsx"></script>
+
+    <!-- Service Worker（若 /public 有 service-worker.js 则会注册；无文件可忽略） -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        // 在页面加载完成后注册 SW，避免阻塞首屏
+        window.addEventListener('load', () => {
+          navigator.serviceWorker
+            .register('/service-worker.js')
+            .catch((err) => console.error('SW register failed:', err));
+        });
+      }
+    </script>
   </body>
 </html>
