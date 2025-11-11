@@ -1,0 +1,49 @@
+{
+  "id": "/",
+  "name": "进食监督面板 Intake Panel",
+  "short_name": "Intake",
+  "description": "记录两餐前/后汇报、Commander复核、奖励/惩罚统计，支持云同步与只读分享的轻量面板。",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0ea5e9",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/pwa-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/pwa-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/pwa-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "打开只读/打印视图",
+      "short_name": "只读视图",
+      "description": "以只读模式查看（适合分享/打印）。",
+      "url": "/?mode=readonly&source=pwa"
+    }
+  ],
+  "categories": [
+    "health",
+    "productivity"
+  ]
+}
