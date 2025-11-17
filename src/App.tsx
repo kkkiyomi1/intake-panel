@@ -123,6 +123,7 @@ export default function App() {
   const [role, setRole] = useState<Role>(() => "commander");
   const [joinCode, setJoinCode] = useState<string>("");
   const pwa = usePwaInstall();
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
 
   const [settings, setSettings] = useState<Settings>(() => {
     const saved = safeGetItem("intake-settings-v2");
@@ -471,9 +472,19 @@ export default function App() {
             ) : (
               <Button
                 variant="outline"
-                onClick={() => pwa.promptInstall?.()}
-                disabled={!pwa.canInstall}
-                title={pwa.canInstall ? "点此添加到主屏/桌面" : "在支持的浏览器中打开即可看到安装提示"}
+                onClick={async () => {
+                  if (pwa.promptInstall) {
+                    await pwa.promptInstall();
+                  } else {
+                    setShowInstallGuide(true);
+                  }
+                }}
+                disabled={pwa.installed}
+                title={
+                  pwa.promptInstall
+                    ? "点此添加到主屏/桌面"
+                    : "若浏览器未弹出安装框，将显示手动添加到主屏的指引"
+                }
               >
                 <Download className="mr-2 h-4 w-4" /> 添加到主屏
               </Button>
@@ -513,6 +524,32 @@ export default function App() {
             <SettingsPanel settings={settings} setSettings={setSettings} readonly={readonlyMode} />
           </div>
         </div>
+
+        {showInstallGuide && !pwa.installed && (
+          <Card className="mb-6 border-emerald-200 bg-emerald-50">
+            <CardHeader className="flex flex-row items-center justify-between py-3">
+              <CardTitle className="text-base">如何添加到主屏</CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => setShowInstallGuide(false)}>
+                关闭
+              </Button>
+            </CardHeader>
+            <CardContent className="pt-0 text-sm text-gray-700 space-y-2">
+              <div>如果浏览器没有自动弹出安装提示，可按以下方式手动添加：</div>
+              <ul className="list-disc space-y-1 pl-5">
+                <li>
+                  <strong>安卓 Chrome / Edge：</strong>点击右上角「⋮」菜单，选择「添加到主屏幕」或「安装应用」。
+                </li>
+                <li>
+                  <strong>iOS Safari：</strong>点击底部分享图标（一个框里向上的箭头），选择「加入主画面」。
+                </li>
+                <li>
+                  <strong>桌面浏览器：</strong>地址栏若显示安装图标（带 + 的小手机/电脑），点击即可安装；否则在浏览器菜单里查找「安装应用」。
+                </li>
+              </ul>
+              <div className="text-xs text-gray-500">提示出现后再次点击「添加到主屏」按钮即可触发安装。</div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Cloud/Room bar */}
         <div className="mb-6 grid gap-3 md:grid-cols-3 no-print">
