@@ -57,6 +57,54 @@ function safeSetItem(key: string, value: string) {
   }
 }
 
+function usePwaInstall() {
+  const [promptEvent, setPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
+  const [installed, setInstalled] = useState(() =>
+    isBrowser && (window.matchMedia("(display-mode: standalone)").matches || (window.navigator as any)?.standalone)
+  );
+
+  useEffect(() => {
+    if (!isBrowser) return;
+    const handler = (e: Event) => {
+      e.preventDefault();
+      setPromptEvent(e as BeforeInstallPromptEvent);
+    };
+    const displayModeMedia = window.matchMedia("(display-mode: standalone)");
+    const displayModeListener = (ev: MediaQueryListEvent) => {
+      if (ev.matches) setInstalled(true);
+    };
+    const installedHandler = () => {
+      setInstalled(true);
+      setPromptEvent(null);
+    };
+    window.addEventListener("beforeinstallprompt", handler);
+    displayModeMedia.addEventListener("change", displayModeListener);
+    window.addEventListener("appinstalled", installedHandler);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handler);
+      displayModeMedia.removeEventListener("change", displayModeListener);
+      window.removeEventListener("appinstalled", installedHandler);
+    };
+  }, []);
+
+  const promptInstall = useMemo(
+    () =>
+      promptEvent
+        ? async () => {
+            await promptEvent.prompt();
+            const choice = await promptEvent.userChoice;
+            if (choice.outcome === "accepted") {
+              setPromptEvent(null);
+              setInstalled(true);
+            }
+          }
+        : null,
+    [promptEvent]
+  );
+
+  return { promptInstall, canInstall: !!promptEvent && !installed, installed };
+}
+
 const defaultSettings = (): Settings => {
   const t = new Date();
   return {
@@ -74,6 +122,7 @@ export default function App() {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [role, setRole] = useState<Role>(() => "commander");
   const [joinCode, setJoinCode] = useState<string>("");
+  const pwa = usePwaInstall();
 
   const [settings, setSettings] = useState<Settings>(() => {
     const saved = safeGetItem("intake-settings-v2");
@@ -415,6 +464,20 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {pwa.installed ? (
+              <Badge variant="secondary" className="bg-emerald-50 text-emerald-700 border border-emerald-200">
+                已安装到主屏
+              </Badge>
+            ) : (
+              <Button
+                variant="outline"
+                onClick={() => pwa.promptInstall?.()}
+                disabled={!pwa.canInstall}
+                title={pwa.canInstall ? "点此添加到主屏/桌面" : "在支持的浏览器中打开即可看到安装提示"}
+              >
+                <Download className="mr-2 h-4 w-4" /> 添加到主屏
+              </Button>
+            )}
             <Button variant="outline" onClick={exportJSON}>
               <Download className="mr-2 h-4 w-4" /> 导出 JSON
             </Button>
