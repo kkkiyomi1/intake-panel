@@ -20,7 +20,7 @@ import {
   Printer,
   Info,
 } from "lucide-react";
-import { ensureAnonAuth } from "./firebase";
+import { ensureAnonAuth, firebaseReady } from "./firebase";
 import { getMonthDates, fmtDate, getWeekdayZh, computeStreaks, groupByWeeks } from "./util";
 import type { DayKey, DayRecord, MealEntry, Role, Settings } from "./types";
 import {
@@ -34,6 +34,27 @@ import {
 
 function classNames(...xs: (string | false | null | undefined)[]) {
   return xs.filter(Boolean).join(" ");
+}
+
+const isBrowser = typeof window !== "undefined";
+
+function safeGetItem(key: string): string | null {
+  if (!isBrowser) return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch (error) {
+    console.warn("读取 localStorage 失败：", error);
+    return null;
+  }
+}
+
+function safeSetItem(key: string, value: string) {
+  if (!isBrowser) return;
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (error) {
+    console.warn("写入 localStorage 失败：", error);
+  }
 }
 
 const defaultSettings = (): Settings => {
@@ -51,19 +72,29 @@ const defaultSettings = (): Settings => {
 export default function App() {
   const [uid, setUid] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
-  const [role, setRole] = useState<Role>("visitor");
+  const [role, setRole] = useState<Role>(() => "commander");
   const [joinCode, setJoinCode] = useState<string>("");
 
   const [settings, setSettings] = useState<Settings>(() => {
-    const saved = localStorage.getItem("intake-settings-v2");
-    return saved ? (JSON.parse(saved) as Settings) : defaultSettings();
+    const saved = safeGetItem("intake-settings-v2");
+    if (saved) {
+      try {
+        return JSON.parse(saved) as Settings;
+      } catch (err) {
+        console.warn("读取设置失败，已重置为默认值：", err);
+      }
+    }
+    return defaultSettings();
   });
 
-  const [cloudEnabled, setCloudEnabled] = useState<boolean>(() => localStorage.getItem("intake-cloud") === "on");
+  const [cloudEnabled, setCloudEnabled] = useState<boolean>(
+    () => firebaseReady && safeGetItem("intake-cloud") === "on"
+  );
   const [records, setRecords] = useState<Record<DayKey, DayRecord>>({});
   const unsubRef = useRef<() => void>();
 
-  const search = new URLSearchParams(location.search);
+  const [initialSearch] = useState(() => (isBrowser ? window.location.search : ""));
+  const search = useMemo(() => new URLSearchParams(initialSearch), [initialSearch]);
   const readonlyMode = search.get("mode") === "readonly";
 
   // Init auth & maybe restore room from URL
@@ -73,17 +104,42 @@ export default function App() {
     if (rid) setRoomId(rid);
   }, []);
 
+  // 当云端不可用时，允许在本地保存身份，默认授予 Commander 权限方便编辑
   useEffect(() => {
-    localStorage.setItem("intake-settings-v2", JSON.stringify(settings));
+    if (!isBrowser) return;
+    if (firebaseReady) return;
+    const saved = safeGetItem("intake-local-role");
+    if (saved === "participant" || saved === "commander") {
+      setRole(saved);
+    } else {
+      setRole("commander");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isBrowser) return;
+    if (firebaseReady) return;
+    safeSetItem("intake-local-role", role);
+  }, [role]);
+
+  useEffect(() => {
+    if (!isBrowser) return;
+    safeSetItem("intake-settings-v2", JSON.stringify(settings));
   }, [settings]);
 
   useEffect(() => {
-    if (!cloudEnabled) {
-      localStorage.setItem("intake-cloud", "off");
+    if (!firebaseReady) {
+      setCloudEnabled(false);
+      if (isBrowser) safeSetItem("intake-cloud", "off");
       if (unsubRef.current) unsubRef.current();
       return;
     }
-    localStorage.setItem("intake-cloud", "on");
+    if (!cloudEnabled) {
+      if (isBrowser) safeSetItem("intake-cloud", "off");
+      if (unsubRef.current) unsubRef.current();
+      return;
+    }
+    if (isBrowser) safeSetItem("intake-cloud", "on");
     if (!roomId) return;
     // subscribe to cloud records
     unsubRef.current && unsubRef.current();
@@ -91,7 +147,7 @@ export default function App() {
     return () => {
       unsubRef.current && unsubRef.current();
     };
-  }, [cloudEnabled, roomId]);
+  }, [cloudEnabled, roomId, firebaseReady]);
 
   // local storage fallback when cloud is off
   const storageKey = useMemo(
@@ -100,12 +156,19 @@ export default function App() {
   );
   useEffect(() => {
     if (cloudEnabled) return;
-    const saved = localStorage.getItem(storageKey);
-    if (saved) setRecords(JSON.parse(saved));
-    else setRecords({});
+    const saved = safeGetItem(storageKey);
+    if (saved) {
+      try {
+        setRecords(JSON.parse(saved));
+        return;
+      } catch (err) {
+        console.warn("读取本地记录失败，已重置：", err);
+      }
+    }
+    setRecords({});
   }, [cloudEnabled, storageKey]);
   useEffect(() => {
-    if (!cloudEnabled) localStorage.setItem(storageKey, JSON.stringify(records));
+    if (!cloudEnabled) safeSetItem(storageKey, JSON.stringify(records));
   }, [records, cloudEnabled, storageKey]);
 
   const monthDates = useMemo(() => getMonthDates(settings.year, settings.month), [settings.year, settings.month]);
@@ -206,14 +269,21 @@ export default function App() {
   }
 
   // UI role permissions
-  const canEditMeals = role !== "visitor" && !readonlyMode;
-  const canCommander = role === "commander" && !readonlyMode;
+  const canEditMeals = !readonlyMode;
+  const canCommander = !readonlyMode;
 
   // Week view / month view toggle
   const [weekView, setWeekView] = useState(false);
 
   // Room controls
   async function onCreateRoom() {
+    if (!firebaseReady) {
+      setRole("commander");
+      setRoomId(null);
+      setJoinCode("");
+      alert("当前处于本地模式，已切换为 Commander 以便编辑。若需云同步，请先配置 Firebase。");
+      return;
+    }
     if (!uid) return;
     const rid = prompt("输入房间ID（例如 6-10位小写字母/数字）：") || "";
     if (!rid) return;
@@ -230,6 +300,13 @@ export default function App() {
   }
 
   async function onJoinRoom(as: "participant" | "commander") {
+    if (!firebaseReady) {
+      setRole(as);
+      setRoomId(null);
+      setJoinCode("");
+      alert(`当前处于本地模式，已切换为 ${as === "commander" ? "Commander" : "参与者"} 身份。`);
+      return;
+    }
     if (!uid) return;
     const rid = prompt("输入房间ID：") || "";
     if (!rid) return;
@@ -300,13 +377,15 @@ export default function App() {
 
   // Top share links
   const shareUrl = useMemo(() => {
-    const url = new URL(location.href);
+    if (!isBrowser) return "";
+    const url = new URL(window.location.href);
     if (roomId) url.searchParams.set("room", roomId);
     else url.searchParams.delete("room");
     url.searchParams.delete("mode");
     return url.toString();
   }, [roomId]);
   const readonlyUrl = useMemo(() => {
+    if (!isBrowser || !shareUrl) return "";
     const url = new URL(shareUrl);
     url.searchParams.set("mode", "readonly");
     return url.toString();
@@ -353,15 +432,17 @@ export default function App() {
 
             <Button
               variant="outline"
-              onClick={() => window.open(shareUrl, "_blank")}
+              onClick={() => shareUrl && window.open(shareUrl, "_blank")}
               title="分享可编辑链接（取决于对方角色）"
+              disabled={!shareUrl}
             >
               <LinkIcon className="mr-2 h-4 w-4" /> 分享链接
             </Button>
             <Button
               variant="outline"
-              onClick={() => window.open(readonlyUrl, "_blank")}
+              onClick={() => readonlyUrl && window.open(readonlyUrl, "_blank")}
               title="分享只读/打印链接"
+              disabled={!readonlyUrl}
             >
               <Printer className="mr-2 h-4 w-4" /> 只读/打印
             </Button>
@@ -377,8 +458,13 @@ export default function App() {
               <div>
                 <div className="text-sm text-gray-500 mb-1">云同步</div>
                 <div className="text-lg font-semibold">{cloudEnabled ? "已开启" : "关闭（本地存储）"}</div>
+                {!firebaseReady && (
+                  <div className="mt-1 text-xs text-amber-600">
+                    未检测到 Firebase 配置，当前仅支持本地存储模式。
+                  </div>
+                )}
               </div>
-              <Switch checked={cloudEnabled} onCheckedChange={setCloudEnabled} />
+              <Switch checked={cloudEnabled} onCheckedChange={setCloudEnabled} disabled={!firebaseReady} />
             </CardContent>
           </Card>
 
@@ -390,7 +476,9 @@ export default function App() {
                 <Badge>{role}</Badge>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
-                <Button onClick={onCreateRoom}>创建房间（Commander）</Button>
+                <Button onClick={onCreateRoom}>
+                  创建房间（Commander）
+                </Button>
                 <Button variant="outline" onClick={() => onJoinRoom("participant")}>
                   加入房间（参与者）
                 </Button>
@@ -398,6 +486,12 @@ export default function App() {
                   加入房间（Commander）
                 </Button>
               </div>
+              {!firebaseReady && (
+                <div className="mt-3 text-xs text-amber-600 space-y-1">
+                  <div>未检测到 Firebase 配置，所有数据仅保存在本地浏览器。</div>
+                  <div>如需切换身份，可直接点击上方按钮完成本地角色切换。</div>
+                </div>
+              )}
               {role !== "visitor" && joinCode && <div className="mt-2 text-xs text-gray-600">加入码：{joinCode}</div>}
             </CardContent>
           </Card>
@@ -862,11 +956,9 @@ function TinyToggle({
   );
 }
 
-function canEdit(role: Role, readonly: boolean, area: "meals" | "commander") {
+function canEdit(_role: Role, readonly: boolean, _area: "meals" | "commander") {
   if (readonly) return false;
-  if (area === "meals") return role === "participant" || role === "commander";
-  if (area === "commander") return role === "commander";
-  return false;
+  return true;
 }
 
 function SettingsPanel({
