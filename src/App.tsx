@@ -57,11 +57,6 @@ function safeSetItem(key: string, value: string) {
   }
 }
 
-type BeforeInstallPromptEvent = Event & {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
-};
-
 function usePwaInstall() {
   const [promptEvent, setPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(() =>
@@ -74,14 +69,20 @@ function usePwaInstall() {
       e.preventDefault();
       setPromptEvent(e as BeforeInstallPromptEvent);
     };
+    const displayModeMedia = window.matchMedia("(display-mode: standalone)");
+    const displayModeListener = (ev: MediaQueryListEvent) => {
+      if (ev.matches) setInstalled(true);
+    };
     const installedHandler = () => {
       setInstalled(true);
       setPromptEvent(null);
     };
     window.addEventListener("beforeinstallprompt", handler);
+    displayModeMedia.addEventListener("change", displayModeListener);
     window.addEventListener("appinstalled", installedHandler);
     return () => {
       window.removeEventListener("beforeinstallprompt", handler);
+      displayModeMedia.removeEventListener("change", displayModeListener);
       window.removeEventListener("appinstalled", installedHandler);
     };
   }, []);
