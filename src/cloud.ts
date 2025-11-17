@@ -1,4 +1,4 @@
-import { db } from "./firebase";
+import { requireFirestore } from "./firebase";
 import {
   doc,
   setDoc,
@@ -12,7 +12,8 @@ import type { DayKey, DayRecord, Member, RoomMeta, Role } from "./types";
 
 /** 读取房间元信息 */
 export async function getRoomMeta(roomId: string): Promise<RoomMeta | null> {
-  const snap = await getDoc(doc(db, "rooms", roomId));
+  const database = requireFirestore();
+  const snap = await getDoc(doc(database, "rooms", roomId));
   return snap.exists() ? (snap.data() as RoomMeta) : null;
 }
 
@@ -24,7 +25,8 @@ export async function createRoom(roomId: string, joinCode: string) {
     joinCode,
     createdAt: Date.now(),
   };
-  await setDoc(doc(db, "rooms", roomId), meta, { merge: true });
+  const database = requireFirestore();
+  await setDoc(doc(database, "rooms", roomId), meta, { merge: true });
   return meta;
 }
 
@@ -40,14 +42,16 @@ export async function joinAsParticipant(
     throw new Error("加入码错误或房间未开放加入");
 
   const m: Member = { uid, role: "participant", createdAt: Date.now() };
-  await setDoc(doc(db, "rooms", roomId, "members", uid), m, { merge: true });
+  const database = requireFirestore();
+  await setDoc(doc(database, "rooms", roomId, "members", uid), m, { merge: true });
   return m;
 }
 
 /** 注册指挥官 */
 export async function registerCommander(roomId: string, uid: string) {
   const m: Member = { uid, role: "commander", createdAt: Date.now() };
-  await setDoc(doc(db, "rooms", roomId, "members", uid), m, { merge: true });
+  const database = requireFirestore();
+  await setDoc(doc(database, "rooms", roomId, "members", uid), m, { merge: true });
   return m;
 }
 
@@ -56,7 +60,8 @@ export async function getMember(
   roomId: string,
   uid: string
 ): Promise<Member | null> {
-  const snap = await getDoc(doc(db, "rooms", roomId, "members", uid));
+  const database = requireFirestore();
+  const snap = await getDoc(doc(database, "rooms", roomId, "members", uid));
   return snap.exists() ? (snap.data() as Member) : null;
 }
 
@@ -65,7 +70,8 @@ export function watchRecords(
   roomId: string,
   cb: (map: Record<DayKey, DayRecord>) => void
 ) {
-  const q = query(collection(db, "rooms", roomId, "records"), orderBy("date"));
+  const database = requireFirestore();
+  const q = query(collection(database, "rooms", roomId, "records"), orderBy("date"));
   return onSnapshot(q, (snap) => {
     const map: Record<DayKey, DayRecord> = {};
     snap.forEach((d) => {
@@ -92,7 +98,8 @@ export async function writeRecord(
     throw new Error("游客不能写入记录");
   }
 
-  const ref = doc(db, "rooms", roomId, "records", rec.date);
+  const database = requireFirestore();
+  const ref = doc(database, "rooms", roomId, "records", rec.date);
 
   // 每次写入都带上元数据
   const meta = {
