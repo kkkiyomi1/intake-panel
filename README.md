@@ -35,7 +35,7 @@
    - **iPhone / iPad（Safari）**：点击底部「分享」→ 选择 **添加到主屏幕**。
    - **Android（Chrome / Edge）**：点击右上角菜单 ⋮ → **添加到主屏幕 / 安装应用**。
    - **桌面 Chrome / Edge**：地址栏右端「安装」图标，或菜单 → **安装应用**。
-3. 安装后图标会出现在桌面/主屏，打开即为全屏独立窗口；已安装的设备下次访问会自动更新到最新版本（注册的 Service Worker 使用 `autoUpdate` 策略）。
+3. 安装后图标会出现在桌面/主屏，打开即为全屏独立窗口；当有新版本发布时，页面顶部会出现“立即更新”提醒，一键刷新即可切换到最新。
 
 > 网页版和安装版共用同一份数据，本地离线模式也可正常工作；如需云同步，请提前在环境中配置 Firebase。
 
@@ -116,7 +116,7 @@ service cloud.firestore {
 
     // 参与者允许变更的字段
     function participantKeysOK() {
-      let allowed = ["date","meal1","meal2","reason","updatedAt","updatedByUid","updatedByRole"];
+      let allowed = ["date","meal1","meal2","reason","weight","updatedAt","updatedByUid","updatedByRole"];
       let d = request.resource.data.diff(resource.data);
       return d.affectedKeys().hasOnly(allowed);
     }
@@ -124,7 +124,7 @@ service cloud.firestore {
     // 指挥官允许变更的字段
     function commanderKeysOK() {
       let allowed = [
-        "date","meal1","meal2","reason",
+        "date","meal1","meal2","reason","weight",
         "commanderReviewed","rewardGranted","consequenceExecuted",
         "updatedAt","updatedByUid","updatedByRole"
       ];
@@ -162,6 +162,8 @@ service cloud.firestore {
 ```
 
 > 如果你把「加入码」校验放在前端（`joinAsParticipant` 内已经校验），规则无需关心加入码；若要挪到规则层，可扩展 `/rooms/{roomId}/members` 的 `create` 校验逻辑。
+
+> 已新增 `weight` 字段，如果之前已经在 Firebase 控制台设置过规则，请重新部署上面更新后的版本，或直接使用仓库根目录的 `firestore.rules` 文件一键替换。
 
 ---
 

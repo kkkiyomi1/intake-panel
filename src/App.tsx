@@ -202,6 +202,8 @@ export default function App() {
   const [joinCode, setJoinCode] = useState<string>("");
   const pwa = usePwaInstall();
   const [showInstallGuide, setShowInstallGuide] = useState(false);
+  const online = useOnlineStatus();
+  const swUpdate = useServiceWorkerUpdate();
 
   const [settings, setSettings] = useState<Settings>(() => {
     const saved = safeGetItem("intake-settings-v2");
