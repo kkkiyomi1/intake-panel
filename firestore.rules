@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function authed() { return request.auth != null; }
+
+    function isMember(roomId) {
+      return authed() &&
+        exists(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid));
+    }
+
+    function isCommander(roomId) {
+      return authed() &&
+        get(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid)).data.role == "commander";
+    }
+
+    // 参与者允许变更的字段（包含体重 weight）
+    function participantKeysOK() {
+      let allowed = ["date","meal1","meal2","reason","weight","updatedAt","updatedByUid","updatedByRole"];
+      let d = request.resource.data.diff(resource.data);
+      return d.affectedKeys().hasOnly(allowed);
+    }
+
+    // 指挥官允许变更的字段（包含体重 weight）
+    function commanderKeysOK() {
+      let allowed = [
+        "date","meal1","meal2","reason","weight",
+        "commanderReviewed","rewardGranted","consequenceExecuted",
+        "updatedAt","updatedByUid","updatedByRole"
+      ];
+      let d = request.resource.data.diff(resource.data);
+      return d.affectedKeys().hasOnly(allowed);
+    }
+
+    match /rooms/{roomId} {
+      allow read: if true;
+      allow write: if isCommander(roomId);
+    }
+
+    match /rooms/{roomId}/members/{uid} {
+      allow read:  if authed() && (request.auth.uid == uid || isCommander(roomId));
+      allow write: if authed() && (request.auth.uid == uid || isCommander(roomId));
+    }
+
+    match /rooms/{roomId}/records/{dateKey} {
+      allow read: if isMember(roomId);
+
+      allow create, update: if isMember(roomId)
+        && request.resource.data.date == dateKey
+        && (
+             (isCommander(roomId) && commanderKeysOK()) ||
+             (!isCommander(roomId) && participantKeysOK())
+           );
+
+      allow delete: if isCommander(roomId);
+    }
+  }
+}
