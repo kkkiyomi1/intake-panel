@@ -115,6 +115,7 @@ export async function writeRecord(
   if (rec.meal1 !== undefined) payload.meal1 = rec.meal1;
   if (rec.meal2 !== undefined) payload.meal2 = rec.meal2;
   if (rec.reason !== undefined) payload.reason = rec.reason;
+  if (rec.weight !== undefined) payload.weight = rec.weight;
 
   // 指挥官可写的管理字段
   if (role === "commander") {

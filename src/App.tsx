@@ -19,6 +19,8 @@ import {
   Link as LinkIcon,
   Printer,
   Info,
+  WifiOff,
+  RotateCw,
 } from "lucide-react";
 import { ensureAnonAuth, firebaseReady } from "./firebase";
 import { getMonthDates, fmtDate, getWeekdayZh, computeStreaks, groupByWeeks } from "./util";
@@ -103,6 +105,82 @@ function usePwaInstall() {
   );
 
   return { promptInstall, canInstall: !!promptEvent && !installed, installed };
+}
+
+function useOnlineStatus() {
+  const [online, setOnline] = useState(() => (isBrowser ? window.navigator.onLine : true));
+
+  useEffect(() => {
+    if (!isBrowser) return;
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
+
+  return online;
+}
+
+function useServiceWorkerUpdate() {
+  const waitingRef = useRef<ServiceWorker | null>(null);
+  const [updateReady, setUpdateReady] = useState(false);
+
+  useEffect(() => {
+    if (!isBrowser || !("serviceWorker" in navigator)) return;
+
+    let reg: ServiceWorkerRegistration | null = null;
+    let updateHandler: (() => void) | null = null;
+
+    const onControllerChange = () => {
+      window.location.reload();
+    };
+
+    const listenToWaiting = (r: ServiceWorkerRegistration) => {
+      const waiting = r.waiting;
+      if (waiting) {
+        waitingRef.current = waiting;
+        setUpdateReady(true);
+      }
+    };
+
+    const attachUpdateFound = (r: ServiceWorkerRegistration) => {
+      const onUpdateFound = () => {
+        const sw = r.installing;
+        if (!sw) return;
+        sw.addEventListener("statechange", () => {
+          if (sw.state === "installed" && navigator.serviceWorker.controller) {
+            waitingRef.current = r.waiting;
+            setUpdateReady(true);
+          }
+        });
+      };
+      r.addEventListener("updatefound", onUpdateFound);
+      return onUpdateFound;
+    };
+
+    navigator.serviceWorker.getRegistration().then((r) => {
+      if (!r) return;
+      reg = r;
+      listenToWaiting(r);
+      updateHandler = attachUpdateFound(r);
+      navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
+    });
+
+    return () => {
+      navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
+      if (reg && updateHandler) reg.removeEventListener("updatefound", updateHandler);
+    };
+  }, []);
+
+  const applyUpdate = () => {
+    waitingRef.current?.postMessage({ type: "SKIP_WAITING" });
+  };
+
+  return { updateReady, applyUpdate };
 }
 
 const defaultSettings = (): Settings => {
@@ -445,6 +523,31 @@ export default function App() {
   return (
     <div className="min-h-screen w-full bg-gray-50 p-4 md:p-8">
       <div className="mx-auto max-w-7xl">
+        {swUpdate.updateReady && (
+          <Card className="mb-4 border-emerald-300 bg-emerald-50 no-print">
+            <CardContent className="flex items-center justify-between p-3">
+              <div className="flex items-center gap-2 text-emerald-800 text-sm">
+                <RotateCw className="h-4 w-4" />
+                <span>检测到新版本，点击更新即可加载最新内容。</span>
+              </div>
+              <Button size="sm" onClick={swUpdate.applyUpdate}>
+                立即更新
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {!online && (
+          <Card className="mb-4 border-amber-300 bg-amber-50 no-print">
+            <CardContent className="flex items-center gap-2 p-3 text-amber-800 text-sm">
+              <WifiOff className="h-4 w-4" />
+              <div>
+                当前处于离线模式，可继续编辑本地数据；恢复联网后再开启云同步即可同步到房间。
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Top bar */}
         <div className="mb-4 flex flex-col gap-3 md:mb-8 md:flex-row md:items-center md:justify-between no-print">
           <div className="flex items-center gap-3">
@@ -743,6 +846,105 @@ function SevenDayBucketsPanel({
   );
 }
 
+function WeightInput({
+  value,
+  onChange,
+  compact,
+}: {
+  value: number | undefined;
+  onChange: (v: number | undefined) => void;
+  compact?: boolean;
+}) {
+  const display = value ?? "";
+  return (
+    <label
+      className={classNames(
+        "flex items-center gap-2 text-sm text-gray-700",
+        compact ? "w-full justify-end" : "justify-start"
+      )}
+    >
+      <span className="whitespace-nowrap text-gray-600">{compact ? "体重" : "体重 (kg)"}</span>
+      <Input
+        type="number"
+        inputMode="decimal"
+        step="0.1"
+        value={display === "" ? "" : String(display)}
+        onChange={(e) => {
+          const raw = e.target.value;
+          if (raw === "") {
+            onChange(undefined);
+            return;
+          }
+          const num = Number(raw);
+          onChange(Number.isFinite(num) ? num : undefined);
+        }}
+        className={classNames("h-8", compact ? "w-24 text-xs" : "w-32")}
+        placeholder="kg"
+      />
+    </label>
+  );
+}
+
+function WeeklyWeightChart({ weekKeys, records }: { weekKeys: DayKey[]; records: Record<DayKey, DayRecord> }) {
+  const weights = weekKeys.map((k) => {
+    const w = records[k]?.weight;
+    if (w === null || w === undefined) return null;
+    const num = typeof w === "number" ? w : Number(w);
+    return Number.isFinite(num) ? num : null;
+  });
+  const valid = weights.filter((w): w is number => w !== null);
+  if (valid.length === 0) {
+    return <div className="text-xs text-gray-500">本周暂无体重数据</div>;
+  }
+  const min = Math.min(...valid);
+  const max = Math.max(...valid);
+  const range = max - min || 1;
+
+  const coords = weekKeys
+    .map((k, idx) => {
+      const v = weights[idx];
+      if (v === null) return null;
+      const x = weekKeys.length === 1 ? 0 : (idx / (weekKeys.length - 1)) * 100;
+      const y = 100 - ((v - min) / range) * 100;
+      return { x, y, v, label: k };
+    })
+    .filter(Boolean) as { x: number; y: number; v: number; label: string }[];
+
+  const pathD = coords
+    .reduce((path, p, idx) => `${path}${idx === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)} `, "")
+    .trim();
+
+  return (
+    <div className="w-full max-w-xl text-xs text-gray-700">
+      <div className="flex items-center justify-between mb-1 text-[11px] text-gray-500">
+        <span>体重曲线</span>
+        <span>
+          {min === max ? `约 ${min} kg` : `${min} ~ ${max} kg`}
+        </span>
+      </div>
+      <svg viewBox="0 0 100 100" className="h-20 w-full" role="img" aria-label="本周体重曲线">
+        <polyline points="0,100 100,100" fill="none" stroke="#e5e7eb" strokeWidth="0.5" />
+        {pathD && <path d={pathD} fill="none" stroke="#2563eb" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />} 
+        {coords.map((p, idx) => (
+          <g key={idx}>
+            <circle cx={p.x} cy={p.y} r={1.8} fill="#2563eb" />
+            <text x={p.x} y={Math.min(95, p.y + 8)} fontSize="4" textAnchor="middle" fill="#374151">
+              {p.v}
+            </text>
+          </g>
+        ))}
+      </svg>
+      <div className="grid grid-cols-7 gap-1 text-[11px] text-gray-500">
+        {weekKeys.map((k, idx) => (
+          <div key={k} className="text-center truncate">
+            {k.slice(5)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MonthGrid({
   dates,
   records,
@@ -795,6 +997,14 @@ function MonthGrid({
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
+                <WeightInput
+                  value={rec?.weight}
+                  onChange={(val) =>
+                    canEdit(role, readonlyMode, "meals") && upsertRecord(k, (r) => {
+                      r.weight = val;
+                    })
+                  }
+                />
                 <MealCard
                   label="餐次 1"
                   rec={rec?.meal1}
@@ -857,7 +1067,10 @@ function WeekGrid({
     <div className="space-y-6">
       {weeks.map((wk, idx) => (
         <div key={idx} className="rounded-2xl bg-white border shadow-sm p-3">
-          <div className="mb-2 font-semibold">第 {idx + 1} 周</div>
+          <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div className="font-semibold">第 {idx + 1} 周</div>
+            <WeeklyWeightChart weekKeys={wk} records={records} />
+          </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
             {wk.map((k) => {
               const rec = records[k];
@@ -874,7 +1087,19 @@ function WeekGrid({
                     complete ? "border-emerald-300 bg-emerald-50" : "border-rose-300 bg-rose-50"
                   )}
                 >
-                  <div className="mb-2 text-sm font-medium">{k}</div>
+                  <div className="mb-2 text-sm font-medium flex items-center justify-between gap-2">
+                    <span>{k}</span>
+                    <WeightInput
+                      compact
+                      value={rec?.weight}
+                      onChange={(val) =>
+                        canEdit(role, readonlyMode, "meals") &&
+                        upsertRecord(k, (r) => {
+                          r.weight = val;
+                        })
+                      }
+                    />
+                  </div>
                   <div className="space-y-2">
                     <TinyToggle
                       label="餐1 前"
