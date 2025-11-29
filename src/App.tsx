@@ -887,6 +887,31 @@ function WeightInput({
   );
 }
 
+function buildSmoothPath(points: { x: number; y: number }[], tension = 0.18) {
+  if (points.length === 0) return "";
+  if (points.length === 1) {
+    const p = points[0];
+    return `M ${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
+  }
+
+  let d = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+  for (let i = 1; i < points.length; i++) {
+    const p0 = points[i - 1];
+    const p1 = points[i];
+    const pMinus = points[i - 2] ?? p0;
+    const pPlus = points[i + 1] ?? p1;
+
+    const cp1x = p0.x + (p1.x - pMinus.x) * tension;
+    const cp1y = p0.y + (p1.y - pMinus.y) * tension;
+    const cp2x = p1.x - (pPlus.x - p0.x) * tension;
+    const cp2y = p1.y - (pPlus.y - p0.y) * tension;
+
+    d += ` C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`;
+  }
+
+  return d;
+}
+
 function WeeklyWeightChart({ weekKeys, records }: { weekKeys: DayKey[]; records: Record<DayKey, DayRecord> }) {
   const weights = weekKeys.map((k) => {
     const w = records[k]?.weight;
@@ -912,9 +937,10 @@ function WeeklyWeightChart({ weekKeys, records }: { weekKeys: DayKey[]; records:
     })
     .filter(Boolean) as { x: number; y: number; v: number; label: string }[];
 
-  const pathD = coords
-    .reduce((path, p, idx) => `${path}${idx === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)} `, "")
-    .trim();
+  const pathD = buildSmoothPath(coords);
+  const areaD = pathD
+    ? `${pathD} L ${coords[coords.length - 1].x.toFixed(2)} 100 L ${coords[0].x.toFixed(2)} 100 Z`
+    : "";
 
   return (
     <div className="w-full max-w-xl text-xs text-gray-700">
@@ -924,13 +950,31 @@ function WeeklyWeightChart({ weekKeys, records }: { weekKeys: DayKey[]; records:
           {min === max ? `约 ${min} kg` : `${min} ~ ${max} kg`}
         </span>
       </div>
-      <svg viewBox="0 0 100 100" className="h-20 w-full" role="img" aria-label="本周体重曲线">
-        <polyline points="0,100 100,100" fill="none" stroke="#e5e7eb" strokeWidth="0.5" />
-        {pathD && <path d={pathD} fill="none" stroke="#2563eb" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />} 
+      <svg viewBox="0 0 100 100" className="h-24 w-full" role="img" aria-label="本周体重曲线">
+        <defs>
+          <linearGradient id="weightGradient" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#2563eb" stopOpacity="0.28" />
+            <stop offset="100%" stopColor="#2563eb" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <polyline points="0,20 100,20" fill="none" stroke="#f3f4f6" strokeWidth="0.5" />
+        <polyline points="0,60 100,60" fill="none" stroke="#f3f4f6" strokeWidth="0.5" />
+        <polyline points="0,100 100,100" fill="none" stroke="#e5e7eb" strokeWidth="0.8" />
+        {areaD && <path d={areaD} fill="url(#weightGradient)" stroke="none" />}
+        {pathD && (
+          <path
+            d={pathD}
+            fill="none"
+            stroke="#2563eb"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        )}
         {coords.map((p, idx) => (
           <g key={idx}>
-            <circle cx={p.x} cy={p.y} r={1.8} fill="#2563eb" />
-            <text x={p.x} y={Math.min(95, p.y + 8)} fontSize="4" textAnchor="middle" fill="#374151">
+            <circle cx={p.x} cy={p.y} r={2.3} fill="#2563eb" stroke="#fff" strokeWidth="0.8" />
+            <text x={p.x} y={Math.min(92, p.y + 7.5)} fontSize="4" textAnchor="middle" fill="#1f2937">
               {p.v}
             </text>
           </g>
