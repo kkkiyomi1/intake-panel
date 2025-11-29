@@ -19,8 +19,10 @@ import {
   Link as LinkIcon,
   Printer,
   Info,
+  WifiOff,
+  RotateCw,
 } from "lucide-react";
-import { ensureAnonAuth } from "./firebase";
+import { ensureAnonAuth, firebaseReady } from "./firebase";
 import { getMonthDates, fmtDate, getWeekdayZh, computeStreaks, groupByWeeks } from "./util";
 import type { DayKey, DayRecord, MealEntry, Role, Settings } from "./types";
 import {
@@ -34,6 +36,151 @@ import {
 
 function classNames(...xs: (string | false | null | undefined)[]) {
   return xs.filter(Boolean).join(" ");
+}
+
+const isBrowser = typeof window !== "undefined";
+
+function safeGetItem(key: string): string | null {
+  if (!isBrowser) return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch (error) {
+    console.warn("读取 localStorage 失败：", error);
+    return null;
+  }
+}
+
+function safeSetItem(key: string, value: string) {
+  if (!isBrowser) return;
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (error) {
+    console.warn("写入 localStorage 失败：", error);
+  }
+}
+
+function usePwaInstall() {
+  const [promptEvent, setPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
+  const [installed, setInstalled] = useState(() =>
+    isBrowser && (window.matchMedia("(display-mode: standalone)").matches || (window.navigator as any)?.standalone)
+  );
+
+  useEffect(() => {
+    if (!isBrowser) return;
+    const handler = (e: Event) => {
+      e.preventDefault();
+      setPromptEvent(e as BeforeInstallPromptEvent);
+    };
+    const displayModeMedia = window.matchMedia("(display-mode: standalone)");
+    const displayModeListener = (ev: MediaQueryListEvent) => {
+      if (ev.matches) setInstalled(true);
+    };
+    const installedHandler = () => {
+      setInstalled(true);
+      setPromptEvent(null);
+    };
+    window.addEventListener("beforeinstallprompt", handler);
+    displayModeMedia.addEventListener("change", displayModeListener);
+    window.addEventListener("appinstalled", installedHandler);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handler);
+      displayModeMedia.removeEventListener("change", displayModeListener);
+      window.removeEventListener("appinstalled", installedHandler);
+    };
+  }, []);
+
+  const promptInstall = useMemo(
+    () =>
+      promptEvent
+        ? async () => {
+            await promptEvent.prompt();
+            const choice = await promptEvent.userChoice;
+            if (choice.outcome === "accepted") {
+              setPromptEvent(null);
+              setInstalled(true);
+            }
+          }
+        : null,
+    [promptEvent]
+  );
+
+  return { promptInstall, canInstall: !!promptEvent && !installed, installed };
+}
+
+function useOnlineStatus() {
+  const [online, setOnline] = useState(() => (isBrowser ? window.navigator.onLine : true));
+
+  useEffect(() => {
+    if (!isBrowser) return;
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
+
+  return online;
+}
+
+function useServiceWorkerUpdate() {
+  const waitingRef = useRef<ServiceWorker | null>(null);
+  const [updateReady, setUpdateReady] = useState(false);
+
+  useEffect(() => {
+    if (!isBrowser || !("serviceWorker" in navigator)) return;
+
+    let reg: ServiceWorkerRegistration | null = null;
+    let updateHandler: (() => void) | null = null;
+
+    const onControllerChange = () => {
+      window.location.reload();
+    };
+
+    const listenToWaiting = (r: ServiceWorkerRegistration) => {
+      const waiting = r.waiting;
+      if (waiting) {
+        waitingRef.current = waiting;
+        setUpdateReady(true);
+      }
+    };
+
+    const attachUpdateFound = (r: ServiceWorkerRegistration) => {
+      const onUpdateFound = () => {
+        const sw = r.installing;
+        if (!sw) return;
+        sw.addEventListener("statechange", () => {
+          if (sw.state === "installed" && navigator.serviceWorker.controller) {
+            waitingRef.current = r.waiting;
+            setUpdateReady(true);
+          }
+        });
+      };
+      r.addEventListener("updatefound", onUpdateFound);
+      return onUpdateFound;
+    };
+
+    navigator.serviceWorker.getRegistration().then((r) => {
+      if (!r) return;
+      reg = r;
+      listenToWaiting(r);
+      updateHandler = attachUpdateFound(r);
+      navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
+    });
+
+    return () => {
+      navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
+      if (reg && updateHandler) reg.removeEventListener("updatefound", updateHandler);
+    };
+  }, []);
+
+  const applyUpdate = () => {
+    waitingRef.current?.postMessage({ type: "SKIP_WAITING" });
+  };
+
+  return { updateReady, applyUpdate };
 }
 
 const defaultSettings = (): Settings => {
@@ -51,19 +198,33 @@ const defaultSettings = (): Settings => {
 export default function App() {
   const [uid, setUid] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
-  const [role, setRole] = useState<Role>("visitor");
+  const [role, setRole] = useState<Role>(() => "commander");
   const [joinCode, setJoinCode] = useState<string>("");
+  const pwa = usePwaInstall();
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
+  const online = useOnlineStatus();
+  const swUpdate = useServiceWorkerUpdate();
 
   const [settings, setSettings] = useState<Settings>(() => {
-    const saved = localStorage.getItem("intake-settings-v2");
-    return saved ? (JSON.parse(saved) as Settings) : defaultSettings();
+    const saved = safeGetItem("intake-settings-v2");
+    if (saved) {
+      try {
+        return JSON.parse(saved) as Settings;
+      } catch (err) {
+        console.warn("读取设置失败，已重置为默认值：", err);
+      }
+    }
+    return defaultSettings();
   });
 
-  const [cloudEnabled, setCloudEnabled] = useState<boolean>(() => localStorage.getItem("intake-cloud") === "on");
+  const [cloudEnabled, setCloudEnabled] = useState<boolean>(
+    () => firebaseReady && safeGetItem("intake-cloud") === "on"
+  );
   const [records, setRecords] = useState<Record<DayKey, DayRecord>>({});
   const unsubRef = useRef<() => void>();
 
-  const search = new URLSearchParams(location.search);
+  const [initialSearch] = useState(() => (isBrowser ? window.location.search : ""));
+  const search = useMemo(() => new URLSearchParams(initialSearch), [initialSearch]);
   const readonlyMode = search.get("mode") === "readonly";
 
   // Init auth & maybe restore room from URL
@@ -73,17 +234,42 @@ export default function App() {
     if (rid) setRoomId(rid);
   }, []);
 
+  // 当云端不可用时，允许在本地保存身份，默认授予 Commander 权限方便编辑
   useEffect(() => {
-    localStorage.setItem("intake-settings-v2", JSON.stringify(settings));
+    if (!isBrowser) return;
+    if (firebaseReady) return;
+    const saved = safeGetItem("intake-local-role");
+    if (saved === "participant" || saved === "commander") {
+      setRole(saved);
+    } else {
+      setRole("commander");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isBrowser) return;
+    if (firebaseReady) return;
+    safeSetItem("intake-local-role", role);
+  }, [role]);
+
+  useEffect(() => {
+    if (!isBrowser) return;
+    safeSetItem("intake-settings-v2", JSON.stringify(settings));
   }, [settings]);
 
   useEffect(() => {
-    if (!cloudEnabled) {
-      localStorage.setItem("intake-cloud", "off");
+    if (!firebaseReady) {
+      setCloudEnabled(false);
+      if (isBrowser) safeSetItem("intake-cloud", "off");
       if (unsubRef.current) unsubRef.current();
       return;
     }
-    localStorage.setItem("intake-cloud", "on");
+    if (!cloudEnabled) {
+      if (isBrowser) safeSetItem("intake-cloud", "off");
+      if (unsubRef.current) unsubRef.current();
+      return;
+    }
+    if (isBrowser) safeSetItem("intake-cloud", "on");
     if (!roomId) return;
     // subscribe to cloud records
     unsubRef.current && unsubRef.current();
@@ -91,7 +277,7 @@ export default function App() {
     return () => {
       unsubRef.current && unsubRef.current();
     };
-  }, [cloudEnabled, roomId]);
+  }, [cloudEnabled, roomId, firebaseReady]);
 
   // local storage fallback when cloud is off
   const storageKey = useMemo(
@@ -100,12 +286,19 @@ export default function App() {
   );
   useEffect(() => {
     if (cloudEnabled) return;
-    const saved = localStorage.getItem(storageKey);
-    if (saved) setRecords(JSON.parse(saved));
-    else setRecords({});
+    const saved = safeGetItem(storageKey);
+    if (saved) {
+      try {
+        setRecords(JSON.parse(saved));
+        return;
+      } catch (err) {
+        console.warn("读取本地记录失败，已重置：", err);
+      }
+    }
+    setRecords({});
   }, [cloudEnabled, storageKey]);
   useEffect(() => {
-    if (!cloudEnabled) localStorage.setItem(storageKey, JSON.stringify(records));
+    if (!cloudEnabled) safeSetItem(storageKey, JSON.stringify(records));
   }, [records, cloudEnabled, storageKey]);
 
   const monthDates = useMemo(() => getMonthDates(settings.year, settings.month), [settings.year, settings.month]);
@@ -206,14 +399,21 @@ export default function App() {
   }
 
   // UI role permissions
-  const canEditMeals = role !== "visitor" && !readonlyMode;
-  const canCommander = role === "commander" && !readonlyMode;
+  const canEditMeals = !readonlyMode;
+  const canCommander = !readonlyMode;
 
   // Week view / month view toggle
   const [weekView, setWeekView] = useState(false);
 
   // Room controls
   async function onCreateRoom() {
+    if (!firebaseReady) {
+      setRole("commander");
+      setRoomId(null);
+      setJoinCode("");
+      alert("当前处于本地模式，已切换为 Commander 以便编辑。若需云同步，请先配置 Firebase。");
+      return;
+    }
     if (!uid) return;
     const rid = prompt("输入房间ID（例如 6-10位小写字母/数字）：") || "";
     if (!rid) return;
@@ -230,6 +430,13 @@ export default function App() {
   }
 
   async function onJoinRoom(as: "participant" | "commander") {
+    if (!firebaseReady) {
+      setRole(as);
+      setRoomId(null);
+      setJoinCode("");
+      alert(`当前处于本地模式，已切换为 ${as === "commander" ? "Commander" : "参与者"} 身份。`);
+      return;
+    }
     if (!uid) return;
     const rid = prompt("输入房间ID：") || "";
     if (!rid) return;
@@ -300,13 +507,15 @@ export default function App() {
 
   // Top share links
   const shareUrl = useMemo(() => {
-    const url = new URL(location.href);
+    if (!isBrowser) return "";
+    const url = new URL(window.location.href);
     if (roomId) url.searchParams.set("room", roomId);
     else url.searchParams.delete("room");
     url.searchParams.delete("mode");
     return url.toString();
   }, [roomId]);
   const readonlyUrl = useMemo(() => {
+    if (!isBrowser || !shareUrl) return "";
     const url = new URL(shareUrl);
     url.searchParams.set("mode", "readonly");
     return url.toString();
@@ -316,6 +525,31 @@ export default function App() {
   return (
     <div className="min-h-screen w-full bg-gray-50 p-4 md:p-8">
       <div className="mx-auto max-w-7xl">
+        {swUpdate.updateReady && (
+          <Card className="mb-4 border-emerald-300 bg-emerald-50 no-print">
+            <CardContent className="flex items-center justify-between p-3">
+              <div className="flex items-center gap-2 text-emerald-800 text-sm">
+                <RotateCw className="h-4 w-4" />
+                <span>检测到新版本，点击更新即可加载最新内容。</span>
+              </div>
+              <Button size="sm" onClick={swUpdate.applyUpdate}>
+                立即更新
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {!online && (
+          <Card className="mb-4 border-amber-300 bg-amber-50 no-print">
+            <CardContent className="flex items-center gap-2 p-3 text-amber-800 text-sm">
+              <WifiOff className="h-4 w-4" />
+              <div>
+                当前处于离线模式，可继续编辑本地数据；恢复联网后再开启云同步即可同步到房间。
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Top bar */}
         <div className="mb-4 flex flex-col gap-3 md:mb-8 md:flex-row md:items-center md:justify-between no-print">
           <div className="flex items-center gap-3">
@@ -336,6 +570,30 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {pwa.installed ? (
+              <Badge variant="secondary" className="bg-emerald-50 text-emerald-700 border border-emerald-200">
+                已安装到主屏
+              </Badge>
+            ) : (
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  if (pwa.promptInstall) {
+                    await pwa.promptInstall();
+                  } else {
+                    setShowInstallGuide(true);
+                  }
+                }}
+                disabled={pwa.installed}
+                title={
+                  pwa.promptInstall
+                    ? "点此添加到主屏/桌面"
+                    : "若浏览器未弹出安装框，将显示手动添加到主屏的指引"
+                }
+              >
+                <Download className="mr-2 h-4 w-4" /> 添加到主屏
+              </Button>
+            )}
             <Button variant="outline" onClick={exportJSON}>
               <Download className="mr-2 h-4 w-4" /> 导出 JSON
             </Button>
@@ -353,15 +611,17 @@ export default function App() {
 
             <Button
               variant="outline"
-              onClick={() => window.open(shareUrl, "_blank")}
+              onClick={() => shareUrl && window.open(shareUrl, "_blank")}
               title="分享可编辑链接（取决于对方角色）"
+              disabled={!shareUrl}
             >
               <LinkIcon className="mr-2 h-4 w-4" /> 分享链接
             </Button>
             <Button
               variant="outline"
-              onClick={() => window.open(readonlyUrl, "_blank")}
+              onClick={() => readonlyUrl && window.open(readonlyUrl, "_blank")}
               title="分享只读/打印链接"
+              disabled={!readonlyUrl}
             >
               <Printer className="mr-2 h-4 w-4" /> 只读/打印
             </Button>
@@ -370,6 +630,32 @@ export default function App() {
           </div>
         </div>
 
+        {showInstallGuide && !pwa.installed && (
+          <Card className="mb-6 border-emerald-200 bg-emerald-50">
+            <CardHeader className="flex flex-row items-center justify-between py-3">
+              <CardTitle className="text-base">如何添加到主屏</CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => setShowInstallGuide(false)}>
+                关闭
+              </Button>
+            </CardHeader>
+            <CardContent className="pt-0 text-sm text-gray-700 space-y-2">
+              <div>如果浏览器没有自动弹出安装提示，可按以下方式手动添加：</div>
+              <ul className="list-disc space-y-1 pl-5">
+                <li>
+                  <strong>安卓 Chrome / Edge：</strong>点击右上角「⋮」菜单，选择「添加到主屏幕」或「安装应用」。
+                </li>
+                <li>
+                  <strong>iOS Safari：</strong>点击底部分享图标（一个框里向上的箭头），选择「加入主画面」。
+                </li>
+                <li>
+                  <strong>桌面浏览器：</strong>地址栏若显示安装图标（带 + 的小手机/电脑），点击即可安装；否则在浏览器菜单里查找「安装应用」。
+                </li>
+              </ul>
+              <div className="text-xs text-gray-500">提示出现后再次点击「添加到主屏」按钮即可触发安装。</div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Cloud/Room bar */}
         <div className="mb-6 grid gap-3 md:grid-cols-3 no-print">
           <Card>
@@ -377,8 +663,13 @@ export default function App() {
               <div>
                 <div className="text-sm text-gray-500 mb-1">云同步</div>
                 <div className="text-lg font-semibold">{cloudEnabled ? "已开启" : "关闭（本地存储）"}</div>
+                {!firebaseReady && (
+                  <div className="mt-1 text-xs text-amber-600">
+                    未检测到 Firebase 配置，当前仅支持本地存储模式。
+                  </div>
+                )}
               </div>
-              <Switch checked={cloudEnabled} onCheckedChange={setCloudEnabled} />
+              <Switch checked={cloudEnabled} onCheckedChange={setCloudEnabled} disabled={!firebaseReady} />
             </CardContent>
           </Card>
 
@@ -390,7 +681,9 @@ export default function App() {
                 <Badge>{role}</Badge>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
-                <Button onClick={onCreateRoom}>创建房间（Commander）</Button>
+                <Button onClick={onCreateRoom}>
+                  创建房间（Commander）
+                </Button>
                 <Button variant="outline" onClick={() => onJoinRoom("participant")}>
                   加入房间（参与者）
                 </Button>
@@ -398,6 +691,12 @@ export default function App() {
                   加入房间（Commander）
                 </Button>
               </div>
+              {!firebaseReady && (
+                <div className="mt-3 text-xs text-amber-600 space-y-1">
+                  <div>未检测到 Firebase 配置，所有数据仅保存在本地浏览器。</div>
+                  <div>如需切换身份，可直接点击上方按钮完成本地角色切换。</div>
+                </div>
+              )}
               {role !== "visitor" && joinCode && <div className="mt-2 text-xs text-gray-600">加入码：{joinCode}</div>}
             </CardContent>
           </Card>
@@ -549,6 +848,105 @@ function SevenDayBucketsPanel({
   );
 }
 
+function WeightInput({
+  value,
+  onChange,
+  compact,
+}: {
+  value: number | undefined;
+  onChange: (v: number | undefined) => void;
+  compact?: boolean;
+}) {
+  const display = value ?? "";
+  return (
+    <label
+      className={classNames(
+        "flex items-center gap-2 text-sm text-gray-700",
+        compact ? "w-full justify-end" : "justify-start"
+      )}
+    >
+      <span className="whitespace-nowrap text-gray-600">{compact ? "体重" : "体重 (kg)"}</span>
+      <Input
+        type="number"
+        inputMode="decimal"
+        step="0.1"
+        value={display === "" ? "" : String(display)}
+        onChange={(e) => {
+          const raw = e.target.value;
+          if (raw === "") {
+            onChange(undefined);
+            return;
+          }
+          const num = Number(raw);
+          onChange(Number.isFinite(num) ? num : undefined);
+        }}
+        className={classNames("h-8", compact ? "w-24 text-xs" : "w-32")}
+        placeholder="kg"
+      />
+    </label>
+  );
+}
+
+function WeeklyWeightChart({ weekKeys, records }: { weekKeys: DayKey[]; records: Record<DayKey, DayRecord> }) {
+  const weights = weekKeys.map((k) => {
+    const w = records[k]?.weight;
+    if (w === null || w === undefined) return null;
+    const num = typeof w === "number" ? w : Number(w);
+    return Number.isFinite(num) ? num : null;
+  });
+  const valid = weights.filter((w): w is number => w !== null);
+  if (valid.length === 0) {
+    return <div className="text-xs text-gray-500">本周暂无体重数据</div>;
+  }
+  const min = Math.min(...valid);
+  const max = Math.max(...valid);
+  const range = max - min || 1;
+
+  const coords = weekKeys
+    .map((k, idx) => {
+      const v = weights[idx];
+      if (v === null) return null;
+      const x = weekKeys.length === 1 ? 0 : (idx / (weekKeys.length - 1)) * 100;
+      const y = 100 - ((v - min) / range) * 100;
+      return { x, y, v, label: k };
+    })
+    .filter(Boolean) as { x: number; y: number; v: number; label: string }[];
+
+  const pathD = coords
+    .reduce((path, p, idx) => `${path}${idx === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)} `, "")
+    .trim();
+
+  return (
+    <div className="w-full max-w-xl text-xs text-gray-700">
+      <div className="flex items-center justify-between mb-1 text-[11px] text-gray-500">
+        <span>体重曲线</span>
+        <span>
+          {min === max ? `约 ${min} kg` : `${min} ~ ${max} kg`}
+        </span>
+      </div>
+      <svg viewBox="0 0 100 100" className="h-20 w-full" role="img" aria-label="本周体重曲线">
+        <polyline points="0,100 100,100" fill="none" stroke="#e5e7eb" strokeWidth="0.5" />
+        {pathD && <path d={pathD} fill="none" stroke="#2563eb" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />} 
+        {coords.map((p, idx) => (
+          <g key={idx}>
+            <circle cx={p.x} cy={p.y} r={1.8} fill="#2563eb" />
+            <text x={p.x} y={Math.min(95, p.y + 8)} fontSize="4" textAnchor="middle" fill="#374151">
+              {p.v}
+            </text>
+          </g>
+        ))}
+      </svg>
+      <div className="grid grid-cols-7 gap-1 text-[11px] text-gray-500">
+        {weekKeys.map((k, idx) => (
+          <div key={k} className="text-center truncate">
+            {k.slice(5)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MonthGrid({
   dates,
   records,
@@ -601,6 +999,14 @@ function MonthGrid({
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
+                <WeightInput
+                  value={rec?.weight}
+                  onChange={(val) =>
+                    canEdit(role, readonlyMode, "meals") && upsertRecord(k, (r) => {
+                      r.weight = val;
+                    })
+                  }
+                />
                 <MealCard
                   label="餐次 1"
                   rec={rec?.meal1}
@@ -663,7 +1069,10 @@ function WeekGrid({
     <div className="space-y-6">
       {weeks.map((wk, idx) => (
         <div key={idx} className="rounded-2xl bg-white border shadow-sm p-3">
-          <div className="mb-2 font-semibold">第 {idx + 1} 周</div>
+          <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div className="font-semibold">第 {idx + 1} 周</div>
+            <WeeklyWeightChart weekKeys={wk} records={records} />
+          </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
             {wk.map((k) => {
               const rec = records[k];
@@ -680,7 +1089,19 @@ function WeekGrid({
                     complete ? "border-emerald-300 bg-emerald-50" : "border-rose-300 bg-rose-50"
                   )}
                 >
-                  <div className="mb-2 text-sm font-medium">{k}</div>
+                  <div className="mb-2 text-sm font-medium flex items-center justify-between gap-2">
+                    <span>{k}</span>
+                    <WeightInput
+                      compact
+                      value={rec?.weight}
+                      onChange={(val) =>
+                        canEdit(role, readonlyMode, "meals") &&
+                        upsertRecord(k, (r) => {
+                          r.weight = val;
+                        })
+                      }
+                    />
+                  </div>
                   <div className="space-y-2">
                     <TinyToggle
                       label="餐1 前"
@@ -862,11 +1283,9 @@ function TinyToggle({
   );
 }
 
-function canEdit(role: Role, readonly: boolean, area: "meals" | "commander") {
+function canEdit(_role: Role, readonly: boolean, _area: "meals" | "commander") {
   if (readonly) return false;
-  if (area === "meals") return role === "participant" || role === "commander";
-  if (area === "commander") return role === "commander";
-  return false;
+  return true;
 }
 
 function SettingsPanel({
