@@ -10,6 +10,7 @@ export interface MealEntry {
 
 export interface DayRecord {
   date: DayKey;
+  weight?: number;
   meal1: MealEntry;
   meal2: MealEntry;
   commanderReviewed: boolean;
