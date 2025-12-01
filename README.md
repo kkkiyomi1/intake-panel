@@ -95,7 +95,7 @@ npm run dev
 
 ## 🔒 Firestore 规则（复制到控制台 Rules 并发布）
 
-与当前实现匹配：**成员可读；参与者只能改餐食/时间/内容/原因；Commander 还能改复核与奖惩；仅 Commander 可改房间元数据**。
+与当前实现匹配：**所有已登录用户都可以写入日常与管理字段（不再区分角色），房间元数据仍仅限 Commander 修改**。
 
 ```rules
 rules_version = '2';
@@ -114,15 +114,8 @@ service cloud.firestore {
         get(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid)).data.role == "commander";
     }
 
-    // 参与者允许变更的字段
-    function participantKeysOK() {
-      let allowed = ["date","meal1","meal2","reason","weight","updatedAt","updatedByUid","updatedByRole"];
-      let d = request.resource.data.diff(resource.data);
-      return d.affectedKeys().hasOnly(allowed);
-    }
-
-    // 指挥官允许变更的字段
-    function commanderKeysOK() {
+    // 允许变更的字段（取消角色限制，所有登录用户都可写入）
+    function allowedKeysOK() {
       let allowed = [
         "date","meal1","meal2","reason","weight",
         "commanderReviewed","rewardGranted","consequenceExecuted",
@@ -150,10 +143,7 @@ service cloud.firestore {
 
       allow create, update: if isMember(roomId)
         && request.resource.data.date == dateKey
-        && (
-             (isCommander(roomId) && commanderKeysOK()) ||
-             (!isCommander(roomId) && participantKeysOK())
-           );
+        && allowedKeysOK();
 
       allow delete: if isCommander(roomId);
     }
@@ -164,6 +154,8 @@ service cloud.firestore {
 > 如果你把「加入码」校验放在前端（`joinAsParticipant` 内已经校验），规则无需关心加入码；若要挪到规则层，可扩展 `/rooms/{roomId}/members` 的 `create` 校验逻辑。
 
 > 已新增 `weight` 字段，如果之前已经在 Firebase 控制台设置过规则，请重新部署上面更新后的版本，或直接使用仓库根目录的 `firestore.rules` 文件一键替换。
+
+> 本次调整取消了云端对角色的写入限制，确保参与者也能提交餐食/体重/奖惩更新；如仍在使用旧版规则，请重新发布上面的最新规则。
 
 ---
 

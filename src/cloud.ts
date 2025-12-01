@@ -91,10 +91,7 @@ export function watchRecords(
 }
 
 /**
- * 写入单日记录（按角色做“部分写入”）：
- * - participant 仅能写 meal1/meal2/reason
- * - commander 可写所有字段（含 commanderReviewed/rewardGranted/consequenceExecuted）
- * 统一写入元数据：updatedByUid/updatedByRole/updatedAt
+ * 写入单日记录（取消角色限制，所有登录用户可写各字段），并统一附带元数据。
  */
 export async function writeRecord(
   roomId: string,
@@ -102,10 +99,6 @@ export async function writeRecord(
   uid: string,
   role: Role
 ) {
-  if (role === "visitor") {
-    throw new Error("游客不能写入记录");
-  }
-
   const database = requireFirestore();
   const ref = doc(database, "rooms", roomId, "records", rec.date);
 
@@ -128,15 +121,13 @@ export async function writeRecord(
     if (Number.isFinite(weight)) payload.weight = weight;
   }
 
-  // 指挥官可写的管理字段
-  if (role === "commander") {
-    if (rec.commanderReviewed !== undefined)
-      payload.commanderReviewed = rec.commanderReviewed;
-    if (rec.rewardGranted !== undefined)
-      payload.rewardGranted = rec.rewardGranted;
-    if (rec.consequenceExecuted !== undefined)
-      payload.consequenceExecuted = rec.consequenceExecuted;
-  }
+  // 管理字段（取消角色限制，所有登录用户都可写）
+  if (rec.commanderReviewed !== undefined)
+    payload.commanderReviewed = rec.commanderReviewed;
+  if (rec.rewardGranted !== undefined)
+    payload.rewardGranted = rec.rewardGranted;
+  if (rec.consequenceExecuted !== undefined)
+    payload.consequenceExecuted = rec.consequenceExecuted;
 
   await setDoc(ref, { ...payload, ...meta }, { merge: true });
 }
