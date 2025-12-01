@@ -261,23 +261,36 @@ export default function App() {
     if (!firebaseReady) {
       setCloudEnabled(false);
       if (isBrowser) safeSetItem("intake-cloud", "off");
-      if (unsubRef.current) unsubRef.current();
+      unsubRef.current?.();
       return;
     }
     if (!cloudEnabled) {
       if (isBrowser) safeSetItem("intake-cloud", "off");
-      if (unsubRef.current) unsubRef.current();
+      unsubRef.current?.();
       return;
     }
+    if (uid === "local-only") {
+      setCloudEnabled(false);
+      if (isBrowser) safeSetItem("intake-cloud", "off");
+      return;
+    }
+    if (!roomId || !uid) return;
     if (isBrowser) safeSetItem("intake-cloud", "on");
-    if (!roomId) return;
     // subscribe to cloud records
-    unsubRef.current && unsubRef.current();
-    unsubRef.current = watchRecords(roomId, (map) => setRecords(map));
+    unsubRef.current?.();
+    unsubRef.current = watchRecords(
+      roomId,
+      (map) => setRecords(map),
+      (err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        alert(`云端记录监听失败：${msg}\n请确认已加入房间且具备访问权限，或稍后重试。`);
+        setCloudEnabled(false);
+      }
+    );
     return () => {
-      unsubRef.current && unsubRef.current();
+      unsubRef.current?.();
     };
-  }, [cloudEnabled, roomId, firebaseReady]);
+  }, [cloudEnabled, roomId, firebaseReady, uid]);
 
   // local storage fallback when cloud is off
   const storageKey = useMemo(

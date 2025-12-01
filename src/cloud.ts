@@ -68,18 +68,26 @@ export async function getMember(
 /** 监听房间内所有记录 */
 export function watchRecords(
   roomId: string,
-  cb: (map: Record<DayKey, DayRecord>) => void
+  cb: (map: Record<DayKey, DayRecord>) => void,
+  onError?: (err: unknown) => void
 ) {
   const database = requireFirestore();
   const q = query(collection(database, "rooms", roomId, "records"), orderBy("date"));
-  return onSnapshot(q, (snap) => {
-    const map: Record<DayKey, DayRecord> = {};
-    snap.forEach((d) => {
-      const v = d.data() as DayRecord;
-      map[v.date] = v;
-    });
-    cb(map);
-  });
+  return onSnapshot(
+    q,
+    (snap) => {
+      const map: Record<DayKey, DayRecord> = {};
+      snap.forEach((d) => {
+        const v = d.data() as DayRecord;
+        map[v.date] = v;
+      });
+      cb(map);
+    },
+    (err) => {
+      console.error("监听云端记录失败", err);
+      onError?.(err);
+    }
+  );
 }
 
 /**

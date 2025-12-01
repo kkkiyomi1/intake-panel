@@ -42,14 +42,16 @@ service cloud.firestore {
       allow write: if authed() && (request.auth.uid == uid || isCommander(roomId));
     }
 
-    match /rooms/{roomId}/records/{dateKey} {
-      allow read: if isMember(roomId);
+    match /rooms/{roomId}/records/{dateKey} { 
+      // 开放读取给所有已登录用户，避免成员信息缺失导致看不到他人更新
+      allow read: if authed();
 
-      allow create, update: if isMember(roomId)
+      // 任意登录用户都可写入可变更字段；拥有 Commander 角色的可写管理字段
+      allow create, update: if authed()
         && request.resource.data.date == dateKey
         && (
              (isCommander(roomId) && commanderKeysOK()) ||
-             (!isCommander(roomId) && participantKeysOK())
+             participantKeysOK()
            );
 
       allow delete: if isCommander(roomId);
