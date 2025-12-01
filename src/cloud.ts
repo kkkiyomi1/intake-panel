@@ -1,4 +1,4 @@
-import { db } from "./firebase";
+import { requireFirestore } from "./firebase";
 import {
   doc,
   setDoc,
@@ -12,7 +12,8 @@ import type { DayKey, DayRecord, Member, RoomMeta, Role } from "./types";
 
 /** 读取房间元信息 */
 export async function getRoomMeta(roomId: string): Promise<RoomMeta | null> {
-  const snap = await getDoc(doc(db, "rooms", roomId));
+  const database = requireFirestore();
+  const snap = await getDoc(doc(database, "rooms", roomId));
   return snap.exists() ? (snap.data() as RoomMeta) : null;
 }
 
@@ -24,7 +25,8 @@ export async function createRoom(roomId: string, joinCode: string) {
     joinCode,
     createdAt: Date.now(),
   };
-  await setDoc(doc(db, "rooms", roomId), meta, { merge: true });
+  const database = requireFirestore();
+  await setDoc(doc(database, "rooms", roomId), meta, { merge: true });
   return meta;
 }
 
@@ -40,14 +42,16 @@ export async function joinAsParticipant(
     throw new Error("加入码错误或房间未开放加入");
 
   const m: Member = { uid, role: "participant", createdAt: Date.now() };
-  await setDoc(doc(db, "rooms", roomId, "members", uid), m, { merge: true });
+  const database = requireFirestore();
+  await setDoc(doc(database, "rooms", roomId, "members", uid), m, { merge: true });
   return m;
 }
 
 /** 注册指挥官 */
 export async function registerCommander(roomId: string, uid: string) {
   const m: Member = { uid, role: "commander", createdAt: Date.now() };
-  await setDoc(doc(db, "rooms", roomId, "members", uid), m, { merge: true });
+  const database = requireFirestore();
+  await setDoc(doc(database, "rooms", roomId, "members", uid), m, { merge: true });
   return m;
 }
 
@@ -56,31 +60,38 @@ export async function getMember(
   roomId: string,
   uid: string
 ): Promise<Member | null> {
-  const snap = await getDoc(doc(db, "rooms", roomId, "members", uid));
+  const database = requireFirestore();
+  const snap = await getDoc(doc(database, "rooms", roomId, "members", uid));
   return snap.exists() ? (snap.data() as Member) : null;
 }
 
 /** 监听房间内所有记录 */
 export function watchRecords(
   roomId: string,
-  cb: (map: Record<DayKey, DayRecord>) => void
+  cb: (map: Record<DayKey, DayRecord>) => void,
+  onError?: (err: unknown) => void
 ) {
-  const q = query(collection(db, "rooms", roomId, "records"), orderBy("date"));
-  return onSnapshot(q, (snap) => {
-    const map: Record<DayKey, DayRecord> = {};
-    snap.forEach((d) => {
-      const v = d.data() as DayRecord;
-      map[v.date] = v;
-    });
-    cb(map);
-  });
+  const database = requireFirestore();
+  const q = query(collection(database, "rooms", roomId, "records"), orderBy("date"));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const map: Record<DayKey, DayRecord> = {};
+      snap.forEach((d) => {
+        const v = d.data() as DayRecord;
+        map[v.date] = v;
+      });
+      cb(map);
+    },
+    (err) => {
+      console.error("监听云端记录失败", err);
+      onError?.(err);
+    }
+  );
 }
 
 /**
- * 写入单日记录（按角色做“部分写入”）：
- * - participant 仅能写 meal1/meal2/reason
- * - commander 可写所有字段（含 commanderReviewed/rewardGranted/consequenceExecuted）
- * 统一写入元数据：updatedByUid/updatedByRole/updatedAt
+ * 写入单日记录（取消角色限制，所有登录用户可写各字段），并统一附带元数据。
  */
 export async function writeRecord(
   roomId: string,
@@ -88,11 +99,8 @@ export async function writeRecord(
   uid: string,
   role: Role
 ) {
-  if (role === "visitor") {
-    throw new Error("游客不能写入记录");
-  }
-
-  const ref = doc(db, "rooms", roomId, "records", rec.date);
+  const database = requireFirestore();
+  const ref = doc(database, "rooms", roomId, "records", rec.date);
 
   // 每次写入都带上元数据
   const meta = {
@@ -108,16 +116,18 @@ export async function writeRecord(
   if (rec.meal1 !== undefined) payload.meal1 = rec.meal1;
   if (rec.meal2 !== undefined) payload.meal2 = rec.meal2;
   if (rec.reason !== undefined) payload.reason = rec.reason;
-
-  // 指挥官可写的管理字段
-  if (role === "commander") {
-    if (rec.commanderReviewed !== undefined)
-      payload.commanderReviewed = rec.commanderReviewed;
-    if (rec.rewardGranted !== undefined)
-      payload.rewardGranted = rec.rewardGranted;
-    if (rec.consequenceExecuted !== undefined)
-      payload.consequenceExecuted = rec.consequenceExecuted;
+  if (rec.weight !== undefined) {
+    const weight = typeof rec.weight === "number" ? rec.weight : Number(rec.weight);
+    if (Number.isFinite(weight)) payload.weight = weight;
   }
+
+  // 管理字段（取消角色限制，所有登录用户都可写）
+  if (rec.commanderReviewed !== undefined)
+    payload.commanderReviewed = rec.commanderReviewed;
+  if (rec.rewardGranted !== undefined)
+    payload.rewardGranted = rec.rewardGranted;
+  if (rec.consequenceExecuted !== undefined)
+    payload.consequenceExecuted = rec.consequenceExecuted;
 
   await setDoc(ref, { ...payload, ...meta }, { merge: true });
 }

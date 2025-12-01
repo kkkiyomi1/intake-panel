@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function authed() { return request.auth != null; }
+
+    function isMember(roomId) {
+      return authed() &&
+        exists(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid));
+    }
+
+    function isCommander(roomId) {
+      return authed() &&
+        get(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid)).data.role == "commander";
+    }
+
+    // 允许变更的字段（取消角色限制，所有登录用户都可编辑日常字段和管理字段）
+    function allowedKeysOK() {
+      let allowed = [
+        "date","meal1","meal2","reason","weight",
+        "commanderReviewed","rewardGranted","consequenceExecuted",
+        "updatedAt","updatedByUid","updatedByRole"
+      ];
+      let d = request.resource.data.diff(resource.data);
+      return d.affectedKeys().hasOnly(allowed);
+    }
+
+    match /rooms/{roomId} {
+      allow read: if true;
+      allow write: if isCommander(roomId);
+    }
+
+    match /rooms/{roomId}/members/{uid} {
+      allow read:  if authed() && (request.auth.uid == uid || isCommander(roomId));
+      allow write: if authed() && (request.auth.uid == uid || isCommander(roomId));
+    }
+
+    match /rooms/{roomId}/records/{dateKey} { 
+      // 开放读取给所有已登录用户，避免成员信息缺失导致看不到他人更新
+      allow read: if authed();
+
+      // 任意登录用户都可写入允许的字段；角色信息仅用于元数据记录
+      allow create, update: if authed()
+        && request.resource.data.date == dateKey
+        && allowedKeysOK();
+
+      allow delete: if isCommander(roomId);
+    }
+  }
+}
